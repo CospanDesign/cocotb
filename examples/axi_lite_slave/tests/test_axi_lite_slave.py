@@ -42,7 +42,8 @@ def write_address_0(dut):
     yield Timer(CLK_PERIOD * 10)
     dut.rst <= 0
 
-    ADDRESS = 0x00
+    #Shift the adress up by 2 in order to make the addresses 32-bit aligned
+    ADDRESS = 0x00 << 2
     DATA = 0xAB
 
     yield axim.write(ADDRESS, DATA)
@@ -80,6 +81,8 @@ def read_address_1(dut):
     dut.rst <= 0
     yield Timer(CLK_PERIOD)
     ADDRESS = 0x01
+    #Shift the adress up by 2 in order to make the addresses 32-bit aligned
+    ADDRESS = 0x01 << 2
     DATA = 0xCD
 
     dut.dut.r_temp_1 <= DATA
@@ -118,7 +121,8 @@ def write_and_read(dut):
     yield Timer(CLK_PERIOD * 10)
     dut.rst <= 0
 
-    ADDRESS = 0x00
+    #Shift the adress up by 2 in order to make the addresses 32-bit aligned
+    ADDRESS = 0x00 << 2
     DATA = 0xAB
 
     #Write to the register
@@ -158,7 +162,8 @@ def write_fail(dut):
     yield Timer(CLK_PERIOD * 10)
     dut.rst <= 0
 
-    ADDRESS = 0x02
+    #Shift the adress up by 2 in order to make the addresses 32-bit aligned
+    ADDRESS = 0x02 << 2
     DATA = 0xAB
 
     try:
@@ -192,11 +197,12 @@ def read_fail(dut):
     yield Timer(CLK_PERIOD * 10)
     dut.rst <= 0
 
-    ADDRESS = 0x02
+    #Shift the adress up by 2 in order to make the addresses 32-bit aligned
+    ADDRESS = 0x02 << 2
     DATA = 0xAB
 
     try:
-        yield axim.read(ADDRESS, DATA)
+        yield axim.read(ADDRESS)
         yield Timer(CLK_PERIOD * 10)
     except AXIProtocolError as e:
         print("Exception: %s" % str(e))
