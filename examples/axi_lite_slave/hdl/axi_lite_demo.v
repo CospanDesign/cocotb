@@ -31,7 +31,7 @@ SOFTWARE.
 `timescale 1ps / 1ps
 
 module axi_lite_demo #(
-  parameter ADDR_WIDTH          = 32,
+  parameter ADDR_WIDTH          = 5,
   parameter DATA_WIDTH          = 32,
   parameter STROBE_WIDTH        = (DATA_WIDTH / 8)
 )(
@@ -63,15 +63,111 @@ module axi_lite_demo #(
   output                              o_rvalid,
   input                               i_rready,
   output      [1:0]                   o_rresp,
-  output      [DATA_WIDTH - 1: 0]     o_rdata
+  output      [DATA_WIDTH - 1: 0]     o_rdata,
+
+
+  //Video Channel
+  output                              o_video_hsync,
+  output                              o_video_vsync,
+  output      [23:0]                  o_video_data  //RGB Data  R[5:0]  -> o_video_data[23:18]
+                                                    //          G[5:0]  -> o_video_data[16:10]
+                                                    //          B[5:0]  -> o_video_data[ 7: 2]
+
+  //AXI Master (For Memory)
+
+
+  input                             i_am_aclk,
+  input                             i_am_areset_n,
+
+  //bus write addr path
+  output  reg [3:0]                 o_am_awid,         //Write ID
+  output      [ADDR_WIDTH - 1:0]    o_am_awaddr,       //Write Addr Path Address
+  output  reg [3:0]                 o_am_awlen,        //Write Addr Path Burst Length
+  output  reg [2:0]                 o_am_awsize,       //Write Addr Path Burst Size
+  output      [1:0]                 o_am_awburst,      //Write Addr Path Burst Type
+                                                        //  0 = Fixed
+                                                        //  1 = Incrementing
+                                                        //  2 = wrap
+  output      [1:0]                 o_am_awlock,       //Write Addr Path Lock (atomic) information
+                                                        //  0 = Normal
+                                                        //  1 = Exclusive
+                                                        //  2 = Locked
+  output      [3:0]                 o_am_awcache,      //Write Addr Path Cache Type
+  output      [2:0]                 o_am_awprot,       //Write Addr Path Protection Type
+  output  reg                       o_am_awvalid,      //Write Addr Path Address Valid
+  input                             i_am_awready,      //Write Addr Path Slave Ready
+                                                        //  1 = Slave Ready
+                                                        //  0 = Slave Not Ready
+
+    //bus write data
+  output  reg [3:0]                 o_am_wid,          //Write ID
+  output  reg [DATA_WIDTH - 1: 0]   o_am_wdata,        //Write Data (this size is set with the DATA_WIDTH Parameter
+                                                      //Valid values are: 8, 16, 32, 64, 128, 256, 512, 1024
+  output  reg [DATA_WIDTH >> 3:0]   o_am_wstrobe,      //Write Strobe (a 1 in the write is associated with the byte to write)
+  output  reg                       o_am_wlast,        //Write Last transfer in a write burst
+  output  reg                       o_am_wvalid,       //Data through this bus is valid
+  input                             i_am_wready,       //Slave is ready for data
+
+    //Write Response Channel
+  input       [3:0]                 i_am_bid,          //Response ID (this must match awid)
+  input       [1:0]                 i_am_bresp,        //Write Response
+                                                        //  0 = OKAY
+                                                        //  1 = EXOKAY
+                                                        //  2 = SLVERR
+                                                        //  3 = DECERR
+  input                             i_am_bvalid,       //Write Response is:
+                                                        //  1 = Available
+                                                        //  0 = Not Available
+  output  reg                       o_am_bready,       //WBM Ready
+
+    //bus read addr path
+  output  reg  [3:0]                o_am_arid,         //Read ID
+  output       [ADDR_WIDTH - 1:0]   o_am_araddr,       //Read Addr Path Address
+  output  reg  [3:0]                o_am_arlen,        //Read Addr Path Burst Length
+  output  reg  [2:0]                o_am_arsize,       //Read Addr Path Burst Size
+  output       [1:0]                o_am_arburst,      //Read Addr Path Burst Type
+  output       [1:0]                o_am_arlock,       //Read Addr Path Lock (atomic) information
+  output       [3:0]                o_am_arcache,      //Read Addr Path Cache Type
+  output       [2:0]                o_am_arprot,       //Read Addr Path Protection Type
+  output  reg                       o_am_arvalid,      //Read Addr Path Address Valid
+  input                             i_am_arready,      //Read Addr Path Slave Ready
+                                                        //  1 = Slave Ready
+                                                        //  0 = Slave Not Ready
+    //bus read data
+  input       [3:0]                 i_am_rid,          //Write ID
+  input       [DATA_WIDTH - 1: 0]   i_am_rdata,        //Write Data (this size is set with the DATA_WIDTH Parameter
+                                                    //Valid values are: 8, 16, 32, 64, 128, 256, 512, 1024
+  input       [DATA_WIDTH >> 3:0]   i_am_rstrobe,      //Write Strobe (a 1 in the write is associated with the byte to write)
+  input                             i_am_rlast,        //Write Last transfer in a write burst
+  input                             i_am_rvalid,       //Data through this bus is valid
+  output  reg                       o_am_rready,       //WBM is ready for data
+                                                        //  1 = WBM Ready
+                                                        //  0 = Slave Ready
+
+  input     [INTERRUPT_WIDTH - 1:0] i_interrupts
+
 );
 //local parameters
 
 //Address Map
-localparam  ADDR_0      = 0;
-localparam  ADDR_1      = 1;
 
-localparam  MAX_ADDR = ADDR_1;
+localparam      CONTROL             = 5'h00;
+localparam      STATUS              = 5'h01;
+localparam      USER_INPUT          = 5'h02;
+localparam      HCI_OPCODE_COUNT    = 5'h03;
+localparam      HCI_OPCODE_ADDR     = 5'h04;
+localparam      HCI_OPCODE          = 5'h05;
+localparam      HCI_OPCODE_DATA     = 5'h06;
+localparam      DMA_STATUS          = 5'h07;
+localparam      REG_MEM_0_BASE      = 5'h08;
+localparam      REG_MEM_0_SIZE      = 5'h09;
+localparam      REG_MEM_1_BASE      = 5'h0A;
+localparam      REG_MEM_1_SIZE      = 5'h0B;
+localparam      REG_IMAGE_WIDTH     = 5'h0C;
+localparam      REG_IMAGE_HEIGHT    = 5'h0D;
+
+
+localparam      MAX_ADDR            = REG_IMAGE_HEIGHT;
 
 //registes/wires
 
