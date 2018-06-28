@@ -85,9 +85,9 @@ class BinaryValue(object):
 
     >>> vec = BinaryValue()
     >>> vec.integer = 42
-    >>> print vec.binstr
+    >>> print(vec.binstr)
     101010
-    >>> print repr(vec.buff)
+    >>> print(repr(vec.buff))
     '*'
 
     """
@@ -369,6 +369,9 @@ class BinaryValue(object):
     def __str__(self):
         return self.binstr
 
+    def __repr__(self):
+        return self.__str__()
+
     def __bool__(self):
         return self.__nonzero__()
 
@@ -376,12 +379,12 @@ class BinaryValue(object):
         """Provide boolean testing of a binstr.
 
         >>> val = BinaryValue("0000")
-        >>> if val: print "True"
-        ... else:   print "False"
+        >>> if val: print("True")
+        ... else:   print("False")
         False
         >>> val.integer = 42
-        >>> if val: print "True"
-        ... else:   print "False"
+        >>> if val: print("True")
+        ... else:   print("False")
         True
 
         """
@@ -513,11 +516,11 @@ class BinaryValue(object):
     def __setitem__(self, key, val):
         ''' BinaryValue uses verilog/vhdl style slices as opposed to python
         style'''
-        if not isinstance(val, str) and not isinstance(val, (int, long)):
+        if not isinstance(val, str) and not isinstance(val, get_python_integer_types()):
             raise TypeError('BinaryValue slices only accept string or integer values')
 
         # convert integer to string
-        if isinstance(val, (int, long)):
+        if isinstance(val, get_python_integer_types()):
             if isinstance(key, slice):
                 num_slice_bits = abs(key.start - key.stop) + 1
             else:

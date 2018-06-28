@@ -30,6 +30,7 @@ import time
 import logging
 import traceback
 import pdb
+import functools
 import threading
 
 from io import StringIO, BytesIO
@@ -242,6 +243,7 @@ class coroutine(object):
         self._func = func
         self.log = SimLog("cocotb.function.%s" % self._func.__name__, id(self))
         self.__name__ = self._func.__name__
+        functools.update_wrapper(self, func)
 
     def __call__(self, *args, **kwargs):
         try:
@@ -328,6 +330,11 @@ class external(object):
                     raise ReturnValue(ext.result)
 
         return wrapper()
+
+    def __get__(self, obj, type=None):
+        """Permit the decorator to be used on class methods
+            and standalone functions"""
+        return self.__class__(self._func.__get__(obj, type))
 
 @public
 class hook(coroutine):
