@@ -1,5 +1,5 @@
 /******************************************************************************
-* Copyright (c) 2013 Potential Ventures Ltd
+* Copyright (c) 2013, 2018 Potential Ventures Ltd
 * Copyright (c) 2013 SolarFlare Communications Inc
 * All rights reserved.
 *
@@ -61,6 +61,29 @@ struct sim_time {
 };
 
 static struct sim_time cache_time;
+
+// Converter function for turning a Python long into a sim handle, such that it
+// can be used by PyArg_ParseTuple format O&.
+static int gpi_sim_hdl_converter(PyObject *o, gpi_sim_hdl *data)
+{
+    void *p = PyLong_AsVoidPtr(o);
+    if ((p == NULL) && PyErr_Occurred()) {
+        return 0;
+    }
+    *data = (gpi_sim_hdl)p;
+    return 1;
+}
+
+// Same as above, for an iterator handle.
+static int gpi_iterator_hdl_converter(PyObject *o, gpi_iterator_hdl *data)
+{
+    void *p = PyLong_AsVoidPtr(o);
+    if ((p == NULL) && PyErr_Occurred()) {
+        return 0;
+    }
+    *data = (gpi_iterator_hdl)p;
+    return 1;
+}
 
 /**
  * @name    Callback Handling
@@ -214,7 +237,7 @@ static PyObject *register_readonly_callback(PyObject *self, PyObject *args)
         LOG_CRITICAL("Failed to allocate user data\n");
     }
 
-    // Set up the user data (no more python API calls after this!
+    // Set up the user data (no more python API calls after this!)
     callback_data_p->_saved_thread_state = PyThreadState_Get();
     callback_data_p->id_value = COCOTB_ACTIVE_ID;
     callback_data_p->function = function;
@@ -223,7 +246,7 @@ static PyObject *register_readonly_callback(PyObject *self, PyObject *args)
 
     hdl = gpi_register_readonly_callback((gpi_function_t)handle_gpi_callback, callback_data_p);
 
-    PyObject *rv = Py_BuildValue("l", hdl);
+    PyObject *rv = PyLong_FromVoidPtr(hdl);
     DROP_GIL(gstate);
     FEXIT
 
@@ -270,7 +293,7 @@ static PyObject *register_rwsynch_callback(PyObject *self, PyObject *args)
         LOG_CRITICAL("Failed to allocate user data\n");
     }
 
-    // Set up the user data (no more python API calls after this!
+    // Set up the user data (no more python API calls after this!)
     callback_data_p->_saved_thread_state = PyThreadState_Get();
     callback_data_p->id_value = COCOTB_ACTIVE_ID;
     callback_data_p->function = function;
@@ -279,7 +302,7 @@ static PyObject *register_rwsynch_callback(PyObject *self, PyObject *args)
 
     hdl = gpi_register_readwrite_callback((gpi_function_t)handle_gpi_callback, callback_data_p);
 
-    PyObject *rv = Py_BuildValue("l", hdl);
+    PyObject *rv = PyLong_FromVoidPtr(hdl);
     DROP_GIL(gstate);
     FEXIT
 
@@ -326,7 +349,7 @@ static PyObject *register_nextstep_callback(PyObject *self, PyObject *args)
         LOG_CRITICAL("Failed to allocate user data\n");
     }
 
-    // Set up the user data (no more python API calls after this!
+    // Set up the user data (no more python API calls after this!)
     callback_data_p->_saved_thread_state = PyThreadState_Get();
     callback_data_p->id_value = COCOTB_ACTIVE_ID;
     callback_data_p->function = function;
@@ -335,7 +358,7 @@ static PyObject *register_nextstep_callback(PyObject *self, PyObject *args)
 
     hdl = gpi_register_nexttime_callback((gpi_function_t)handle_gpi_callback, callback_data_p);
 
-    PyObject *rv = Py_BuildValue("l", hdl);
+    PyObject *rv = PyLong_FromVoidPtr(hdl);
     DROP_GIL(gstate);
     FEXIT
 
@@ -392,7 +415,7 @@ static PyObject *register_timed_callback(PyObject *self, PyObject *args)
         LOG_CRITICAL("Failed to allocate user data\n");
     }
 
-    // Set up the user data (no more python API calls after this!
+    // Set up the user data (no more python API calls after this!)
     callback_data_p->_saved_thread_state = PyThreadState_Get();
     callback_data_p->id_value = COCOTB_ACTIVE_ID;
     callback_data_p->function = function;
@@ -402,7 +425,7 @@ static PyObject *register_timed_callback(PyObject *self, PyObject *args)
     hdl = gpi_register_timed_callback((gpi_function_t)handle_gpi_callback, callback_data_p, time_ps);
 
     // Check success
-    PyObject *rv = Py_BuildValue("l", hdl);
+    PyObject *rv = PyLong_FromVoidPtr(hdl);
     DROP_GIL(gstate);
     FEXIT
 
@@ -437,7 +460,10 @@ static PyObject *register_value_change_callback(PyObject *self, PyObject *args) 
     }
 
     PyObject *pSihHdl = PyTuple_GetItem(args, 0);
-    sig_hdl = (gpi_sim_hdl)PyLong_AsUnsignedLong(pSihHdl);
+    if (!gpi_sim_hdl_converter(pSihHdl, &sig_hdl)) {
+        DROP_GIL(gstate);
+        return NULL;
+    }
 
     // Extract the callback function
     function = PyTuple_GetItem(args, 1);
@@ -448,7 +474,7 @@ static PyObject *register_value_change_callback(PyObject *self, PyObject *args) 
     Py_INCREF(function);
 
     PyObject *pedge = PyTuple_GetItem(args, 2);
-    edge = (unsigned int)PyLong_AsUnsignedLong(pedge);
+    edge = (unsigned int)PyLong_AsLong(pedge);
 
     // Remaining args for function
     if (numargs > 3)
@@ -462,7 +488,7 @@ static PyObject *register_value_change_callback(PyObject *self, PyObject *args) 
         LOG_CRITICAL("Failed to allocate user data\n");
     }
 
-    // Set up the user data (no more python API calls after this!
+    // Set up the user data (no more python API calls after this!)
     // Causes segfault?
     callback_data_p->_saved_thread_state = PyThreadState_Get();//PyThreadState_Get();
     callback_data_p->id_value = COCOTB_ACTIVE_ID;
@@ -476,7 +502,7 @@ static PyObject *register_value_change_callback(PyObject *self, PyObject *args) 
                                              edge);
 
     // Check success
-    PyObject *rv = Py_BuildValue("l", hdl);
+    PyObject *rv = PyLong_FromVoidPtr(hdl);
 
     DROP_GIL(gstate);
     FEXIT
@@ -495,14 +521,14 @@ static PyObject *iterate(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "li", &hdl, &type)) {
+    if (!PyArg_ParseTuple(args, "O&i", gpi_sim_hdl_converter, &hdl, &type)) {
         DROP_GIL(gstate);
         return NULL;
     }
 
     result = gpi_iterate(hdl, (gpi_iterator_sel_t)type);
 
-    res = Py_BuildValue("l", result);
+    res = PyLong_FromVoidPtr(result);
 
     DROP_GIL(gstate);
 
@@ -519,7 +545,7 @@ static PyObject *next(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "l", &hdl)) {
+    if (!PyArg_ParseTuple(args, "O&", gpi_iterator_hdl_converter, &hdl)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -534,14 +560,14 @@ static PyObject *next(PyObject *self, PyObject *args)
 
     result = gpi_next(hdl);
 
-    // Raise stopiteration when we're done
+    // Raise StopIteration when we're done
     if (!result) {
         PyErr_SetNone(PyExc_StopIteration);
         DROP_GIL(gstate);
         return NULL;
     }
 
-    res = Py_BuildValue("l", result);
+    res = PyLong_FromVoidPtr(result);
 
     DROP_GIL(gstate);
 
@@ -558,7 +584,7 @@ static PyObject *get_signal_val_binstr(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "l", &hdl)) {
+    if (!PyArg_ParseTuple(args, "O&", gpi_sim_hdl_converter, &hdl)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -580,7 +606,7 @@ static PyObject *get_signal_val_str(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "l", &hdl)) {
+    if (!PyArg_ParseTuple(args, "O&", gpi_sim_hdl_converter, &hdl)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -602,7 +628,7 @@ static PyObject *get_signal_val_real(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "l", &hdl)) {
+    if (!PyArg_ParseTuple(args, "O&", gpi_sim_hdl_converter, &hdl)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -625,7 +651,7 @@ static PyObject *get_signal_val_long(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "l", &hdl)) {
+    if (!PyArg_ParseTuple(args, "O&", gpi_sim_hdl_converter, &hdl)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -648,12 +674,12 @@ static PyObject *set_signal_val_str(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "ls", &hdl, &binstr)) {
+    if (!PyArg_ParseTuple(args, "O&s", gpi_sim_hdl_converter, &hdl, &binstr)) {
         DROP_GIL(gstate);
         return NULL;
     }
 
-    gpi_set_signal_value_str(hdl,binstr);
+    gpi_set_signal_value_str(hdl, binstr);
     res = Py_BuildValue("s", "OK!");
 
     DROP_GIL(gstate);
@@ -670,7 +696,7 @@ static PyObject *set_signal_val_real(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "ld", &hdl, &value)) {
+    if (!PyArg_ParseTuple(args, "O&d", gpi_sim_hdl_converter, &hdl, &value)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -692,7 +718,7 @@ static PyObject *set_signal_val_long(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "ll", &hdl, &value)) {
+    if (!PyArg_ParseTuple(args, "O&l", gpi_sim_hdl_converter, &hdl, &value)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -714,7 +740,7 @@ static PyObject *get_definition_name(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "l", &hdl)) {
+    if (!PyArg_ParseTuple(args, "O&", gpi_sim_hdl_converter, &hdl)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -736,7 +762,7 @@ static PyObject *get_definition_file(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "l", &hdl)) {
+    if (!PyArg_ParseTuple(args, "O&", gpi_sim_hdl_converter, &hdl)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -759,14 +785,14 @@ static PyObject *get_handle_by_name(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "ls", &hdl, &name)) {
+    if (!PyArg_ParseTuple(args, "O&s", gpi_sim_hdl_converter, &hdl, &name)) {
         DROP_GIL(gstate);
         return NULL;
     }
 
     result = gpi_get_handle_by_name((gpi_sim_hdl)hdl, name);
 
-    res = Py_BuildValue("l", result);
+    res = PyLong_FromVoidPtr(result);
 
     DROP_GIL(gstate);
 
@@ -783,14 +809,14 @@ static PyObject *get_handle_by_index(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "li", &hdl, &index)) {
+    if (!PyArg_ParseTuple(args, "O&i", gpi_sim_hdl_converter, &hdl, &index)) {
         DROP_GIL(gstate);
         return NULL;
     }
 
     result = gpi_get_handle_by_index((gpi_sim_hdl)hdl, index);
 
-    value = Py_BuildValue("l", result);
+    value = PyLong_FromVoidPtr(result);
 
     DROP_GIL(gstate);
 
@@ -818,7 +844,7 @@ static PyObject *get_root_handle(PyObject *self, PyObject *args)
     }
 
 
-    value = Py_BuildValue("l", result);
+    value = PyLong_FromVoidPtr(result);
 
     DROP_GIL(gstate);
 
@@ -835,7 +861,7 @@ static PyObject *get_name_string(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "l", &hdl)) {
+    if (!PyArg_ParseTuple(args, "O&", gpi_sim_hdl_converter, &hdl)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -857,7 +883,7 @@ static PyObject *get_type(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "l", &hdl)) {
+    if (!PyArg_ParseTuple(args, "O&", gpi_sim_hdl_converter, &hdl)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -879,7 +905,7 @@ static PyObject *get_const(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "l", &hdl)) {
+    if (!PyArg_ParseTuple(args, "O&", gpi_sim_hdl_converter, &hdl)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -901,7 +927,7 @@ static PyObject *get_type_string(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "l", &hdl)) {
+    if (!PyArg_ParseTuple(args, "O&", gpi_sim_hdl_converter, &hdl)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -965,7 +991,7 @@ static PyObject *get_num_elems(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "l", &hdl)) {
+    if (!PyArg_ParseTuple(args, "O&", gpi_sim_hdl_converter, &hdl)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -986,7 +1012,7 @@ static PyObject *get_range(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    if (!PyArg_ParseTuple(args, "l", &hdl)) {
+    if (!PyArg_ParseTuple(args, "O&", gpi_sim_hdl_converter, &hdl)) {
         DROP_GIL(gstate);
         return NULL;
     }
@@ -996,7 +1022,7 @@ static PyObject *get_range(PyObject *self, PyObject *args)
     int rng_right = gpi_get_range_right((gpi_sim_hdl)hdl);
 
     if (indexable)
-        retstr = Py_BuildValue("(i,i)", rng_left,rng_right);
+        retstr = Py_BuildValue("(i,i)", rng_left, rng_right);
     else
         retstr = Py_BuildValue("");
 
@@ -1015,7 +1041,6 @@ static PyObject *stop_simulator(PyObject *self, PyObject *args)
 static PyObject *deregister_callback(PyObject *self, PyObject *args)
 {
     gpi_sim_hdl hdl;
-    PyObject *pSihHdl;
     PyObject *value;
 
     FENTER
@@ -1023,8 +1048,10 @@ static PyObject *deregister_callback(PyObject *self, PyObject *args)
     PyGILState_STATE gstate;
     gstate = TAKE_GIL();
 
-    pSihHdl = PyTuple_GetItem(args, 0);
-    hdl = (gpi_sim_hdl)PyLong_AsUnsignedLong(pSihHdl);
+    if (!PyArg_ParseTuple(args, "O&", gpi_sim_hdl_converter, &hdl)) {
+        DROP_GIL(gstate);
+        return NULL;
+    }
 
     gpi_deregister_callback(hdl);
 
@@ -1045,7 +1072,7 @@ static PyObject *log_level(PyObject *self, PyObject *args)
     gstate = TAKE_GIL();
 
     py_level = PyTuple_GetItem(args, 0);
-    new_level = (enum gpi_log_levels)PyLong_AsUnsignedLong(py_level);
+    new_level = (enum gpi_log_levels)PyLong_AsLong(py_level);
 
     set_log_level(new_level);
 

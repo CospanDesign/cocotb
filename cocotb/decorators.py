@@ -30,6 +30,7 @@ import time
 import logging
 import traceback
 import pdb
+import functools
 import threading
 
 from io import StringIO, BytesIO
@@ -130,8 +131,9 @@ class RunningCoroutine(object):
             self.retval = e.retval
             self._finished = True
             raise CoroutineComplete(callback=self._finished_cb)
-        except StopIteration:
+        except StopIteration as e:
             self._finished = True
+            self.retval = getattr(e, 'value', None)  # for python >=3.3
             raise CoroutineComplete(callback=self._finished_cb)
         except Exception as e:
             self._finished = True
@@ -171,6 +173,11 @@ class RunningCoroutine(object):
             otherwise return true"""
         return not self._finished
 
+    def sort_name(self):
+        if self.stage is None:
+            return "%s.%s" % (self.module, self.funcname)
+        else:
+            return "%s.%d.%s" % (self.module, self.stage, self.funcname)
 
 class RunningTest(RunningCoroutine):
     """Add some useful Test functionality to a RunningCoroutine"""
@@ -192,6 +199,7 @@ class RunningTest(RunningCoroutine):
         self.expect_fail = parent.expect_fail
         self.expect_error = parent.expect_error
         self.skip = parent.skip
+        self.stage = parent.stage
 
         self.handler = RunningTest.ErrorLogHandler(self._handle_error_message)
         cocotb.log.addHandler(self.handler)
@@ -242,6 +250,7 @@ class coroutine(object):
         self._func = func
         self.log = SimLog("cocotb.function.%s" % self._func.__name__, id(self))
         self.__name__ = self._func.__name__
+        functools.update_wrapper(self, func)
 
     def __call__(self, *args, **kwargs):
         try:
@@ -329,6 +338,11 @@ class external(object):
 
         return wrapper()
 
+    def __get__(self, obj, type=None):
+        """Permit the decorator to be used on class methods
+            and standalone functions"""
+        return self.__class__(self._func.__get__(obj, type))
+
 @public
 class hook(coroutine):
     """Decorator to mark a function as a hook for cocotb
@@ -370,13 +384,16 @@ class test(coroutine):
             This is for cocotb internal regression use
         skip: (bool):
             Don't execute this test as part of the regression
+        stage: (int)
+            Order tests logically into stages, where multiple tests can share a stage
     """
     def __init__(self, timeout=None, expect_fail=False, expect_error=False,
-                 skip=False):
+                 skip=False, stage=None):
         self.timeout = timeout
         self.expect_fail = expect_fail
         self.expect_error = expect_error
         self.skip = skip
+        self.stage = stage
 
     def __call__(self, f):
         super(test, self).__init__(f)
