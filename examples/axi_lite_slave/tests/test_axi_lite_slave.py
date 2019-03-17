@@ -80,7 +80,6 @@ def read_address_1(dut):
     yield Timer(CLK_PERIOD * 10)
     dut.rst <= 0
     yield Timer(CLK_PERIOD)
-    ADDRESS = 0x01
     #Shift the adress up by 2 in order to make the addresses 32-bit aligned
     ADDRESS = 0x01 << 2
     DATA = 0xCD
