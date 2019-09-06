@@ -1,66 +1,69 @@
 from __future__ import print_function
 
-''' Copyright (c) 2013, 2018 Potential Ventures Ltd
-Copyright (c) 2013 SolarFlare Communications Inc
-All rights reserved.
+# Copyright (c) 2013 Potential Ventures Ltd
+# Copyright (c) 2013 SolarFlare Communications Inc
+# All rights reserved.
+# 
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#     * Redistributions of source code must retain the above copyright
+#       notice, this list of conditions and the following disclaimer.
+#     * Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in the
+#       documentation and/or other materials provided with the distribution.
+#     * Neither the name of Potential Ventures Ltd,
+#       SolarFlare Communications Inc nor the
+#       names of its contributors may be used to endorse or promote products
+#       derived from this software without specific prior written permission.
+# 
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL POTENTIAL VENTURES LTD BE LIABLE FOR ANY
+# DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+# SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in the
-      documentation and/or other materials provided with the distribution.
-    * Neither the name of Potential Ventures Ltd,
-      SolarFlare Communications Inc nor the
-      names of its contributors may be used to endorse or promote products
-      derived from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL POTENTIAL VENTURES LTD BE LIABLE FOR ANY
-DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. '''
-
-"""Collection of handy functions"""
+"""Collection of handy functions."""
 
 import ctypes
 import math
 import os
 import sys
+import weakref
+import functools
+import warnings
 
-# For autodocumentation don't need the extension modules
-if "SPHINX_BUILD" in os.environ:
+if "COCOTB_SIM" in os.environ:
+    import simulator
+    _LOG_SIM_PRECISION = simulator.get_precision()  # request once and cache
+else:
     simulator = None
     _LOG_SIM_PRECISION = -15
-else:
-    import simulator
-    _LOG_SIM_PRECISION = simulator.get_precision() # request once and cache
 
-# python2 to python3 helper functions
+
 def get_python_integer_types():
-    try:
-        isinstance(1, long)
-    except NameError:
-        return (int,)  # python 3
-    else:
-        return (int, long)  # python 2
+    warnings.warn(
+        "This is an internal cocotb function, use six.integer_types instead",
+        DeprecationWarning)
+    from cocotb import _py_compat
+    return _py_compat.integer_types
+
 
 # Simulator helper functions
 def get_sim_time(units=None):
-    """Retrieves the simulation time from the simulator
+    """Retrieves the simulation time from the simulator.
 
-    Kwargs:
-        units (str):  String specifying the units of the result. (None,'fs','ps','ns','us','ms','sec')
-                      None will return the raw simulation time.
+    Args:
+        units (str or None, optional): String specifying the units of the result
+            (one of ``None``, ``'fs'``, ``'ps'``, ``'ns'``, ``'us'``, ``'ms'``, ``'sec'``).
+            ``None`` will return the raw simulation time.
 
     Returns:
-        The simulation time in the specified units
+        The simulation time in the specified units.
     """
     timeh, timel = simulator.get_sim_time()
 
@@ -72,31 +75,35 @@ def get_sim_time(units=None):
     return result
 
 def get_time_from_sim_steps(steps, units):
-    """Calculates simulation time in the specified units from the steps based on the simulator precision.
+    """Calculates simulation time in the specified *units* from the *steps* based
+    on the simulator precision.
 
     Args:
-        steps (int):  Number of simulation steps
-        units (str):  String specifying the units of the result. ('fs','ps','ns','us','ms','sec')
+        steps (int): Number of simulation steps.
+        units (str): String specifying the units of the result
+            (one of ``'fs'``, ``'ps'``, ``'ns'``, ``'us'``, ``'ms'``, ``'sec'``).
 
     Returns:
-        The simulation time in the specified units
+        The simulation time in the specified units.
     """
     result = steps * (10.0**(_LOG_SIM_PRECISION - _get_log_time_scale(units)))
 
     return result
 
 def get_sim_steps(time, units=None):
-    """Calculates the number of Simulation time steps for a given amount of time
+    """Calculates the number of simulation time steps for a given amount of *time*.
 
     Args:
-        time (int/float):  The value to convert to simulation time steps.
-
-    Kwargs:
-        units (str):  String specifying the units of the result. (None,'fs','ps','ns','us','ms','sec')
-                      None means time is already in simulation time steps.
+        time (int or float):  The value to convert to simulation time steps.
+        units (str or None, optional):  String specifying the units of the result
+            (one of ``None``, ``'fs'``, ``'ps'``, ``'ns'``, ``'us'``, ``'ms'``, ``'sec'``).
+            ``None`` means time is already in simulation time steps.
 
     Returns:
-        The number of simulation time steps
+        int: The number of simulation time steps.
+
+    Raises:
+        :exc:`ValueError`: If given *time* cannot be represented by simulator precision.
     """
     result = time
     if units is not None:
@@ -105,18 +112,21 @@ def get_sim_steps(time, units=None):
     err = int(result) - math.ceil(result)
 
     if err:
-        raise ValueError("Unable to accurately represent {0}({1}) with the simulator precision of 1e{2}".format(time,units,_LOG_SIM_PRECISION))
+        raise ValueError("Unable to accurately represent {0}({1}) with the "
+                         "simulator precision of 1e{2}".format(
+                             time, units, _LOG_SIM_PRECISION))
 
     return int(result)
 
 def _get_log_time_scale(units):
-    """Retrieves the log10() of the scale factor for a given time unit
+    """Retrieves the ``log10()`` of the scale factor for a given time unit.
 
     Args:
-        units (str):  String specifying the units. ('fs','ps','ns','us','ms','sec')
+        units (str): String specifying the units
+            (one of ``'fs'``, ``'ps'``, ``'ns'``, ``'us'``, ``'ms'``, ``'sec'``).
 
     Returns:
-        The the log10() of the scale factor for the time unit
+        The the ``log10()`` of the scale factor for the time unit.
     """
     scale = {
         'fs' :    -15,
@@ -136,37 +146,35 @@ def _get_log_time_scale(units):
 
 
 def pack(ctypes_obj):
-    """Convert a ctypes structure into a python string
-
+    """Convert a :mod:`ctypes` structure into a Python string.
 
     Args:
-        ctypes_obj (ctypes.Structure): ctypes structure to convert to a string
-
+        ctypes_obj (ctypes.Structure): The ctypes structure to convert to a string.
 
     Returns:
-        New python string containing the bytes from memory holding ctypes_obj
+        New Python string containing the bytes from memory holding *ctypes_obj*.
     """
     return ctypes.string_at(ctypes.addressof(ctypes_obj),
                             ctypes.sizeof(ctypes_obj))
 
 
 def unpack(ctypes_obj, string, bytes=None):
-    """Unpack a python string into a ctypes structure
+    """Unpack a Python string into a :mod:`ctypes` structure.
+
+    If the length of *string* is not the correct size for the memory
+    footprint of the ctypes structure then the *bytes* keyword argument 
+    must be used.
 
     Args:
-        ctypes_obj (ctypes.Structure):  ctypes structure to pack into
-
-        string (str):  String to copy over the ctypes_obj memory space
-
-    Kwargs:
-        bytes: Number of bytes to copy
+        ctypes_obj (ctypes.Structure): The ctypes structure to pack into.
+        string (str):  String to copy over the ctypes_obj memory space.
+        bytes (int, optional): Number of bytes to copy. 
+            Defaults to ``None``, meaning the length of *string* is used.
 
     Raises:
-        ValueError, MemoryError
-
-    If the length of the string is not the correct size for the memory
-    footprint of the ctypes structure then the bytes keyword argument must
-    be used
+        :exc:`ValueError`: If length of *string* and size of *ctypes_obj*
+            are not equal.
+        :exc:`MemoryError`: If *bytes* is longer than size of *ctypes_obj*.
     """
     if bytes is None:
         if len(string) != ctypes.sizeof(ctypes_obj):
@@ -196,7 +204,20 @@ def _sane_color(x):
 
 
 def hexdump(x):
-    """Hexdump a buffer"""
+    """Hexdump a buffer.
+
+    Args:
+        x: Object that supports conversion via the ``str`` built-in.
+
+    Returns:
+        A string containing the hexdump.
+
+    Example:
+        >>> print(hexdump('this somewhat long string'))
+        0000   74 68 69 73 20 73 6F 6D 65 77 68 61 74 20 6C 6F   this somewhat lo
+        0010   6E 67 20 73 74 72 69 6E 67                        ng string
+        <BLANKLINE>
+    """
     # adapted from scapy.utils.hexdump
     rs = ""
     x = str(x)
@@ -218,7 +239,26 @@ def hexdump(x):
 
 
 def hexdiffs(x, y):
-    """Return a diff string showing differences between 2 binary strings"""
+    """Return a diff string showing differences between two binary strings.
+
+    Args:
+        x: Object that supports conversion via the ``str`` built-in.
+        y: Object that supports conversion via the ``str`` built-in.
+
+    Example:
+        >>> print(hexdiffs(0, 1))
+        0000      30                                               0
+             0000 31                                               1
+        <BLANKLINE>
+        >>> print(hexdiffs('a', 'b'))
+        0000      61                                               a
+             0000 62                                               b
+        <BLANKLINE>
+        >>> print(hexdiffs('this short thing', 'this also short'))
+        0000      746869732073686F 7274207468696E67 this short thing
+             0000 7468697320616C73 6F  2073686F7274 this also  short
+        <BLANKLINE>
+    """
     # adapted from scapy.utils.hexdiff
 
     def sane(x):
@@ -232,13 +272,9 @@ def hexdiffs(x, y):
         return r
 
     def highlight(string, colour=ANSI.COLOR_HILITE_HEXDIFF_DEFAULT):
-        want_ansi = os.getenv("COCOTB_ANSI_OUTPUT")
-        if want_ansi is None:
-            want_ansi = sys.stdout.isatty()  # default to ANSI for TTYs
-        else:
-            want_ansi = want_ansi == '1'
-
-        if want_ansi:
+        """Highlight with ANSI colors if possible/requested and not running in GUI."""
+        
+        if want_color_output():
             return colour + string + ANSI.COLOR_DEFAULT
         else:
             return string
@@ -361,6 +397,102 @@ def hexdiffs(x, y):
     return rs
 
 
+
+
+class ParametrizedSingleton(type):
+    """A metaclass that allows class construction to reuse an existing instance.
+
+    We use this so that :class:`RisingEdge(sig) <cocotb.triggers.RisingEdge>` and :class:`Join(coroutine) <cocotb.triggers.Join>` always return
+    the same instance, rather than creating new copies.
+    """
+
+    def __init__(cls, *args, **kwargs):
+        # Attach a lookup table to this class.
+        # Weak such that if the instance is no longer referenced, it can be
+        # collected.
+        cls.__instances = weakref.WeakValueDictionary()
+
+    def __singleton_key__(cls, *args, **kwargs):
+        """Convert the construction arguments into a normalized representation that
+        uniquely identifies this singleton.
+        """
+        # Once we drop Python 2, we can implement a default like the following,
+        # which will work in 99% of cases:
+        # return tuple(inspect.Signature(cls).bind(*args, **kwargs).arguments.items())
+        raise NotImplementedError
+
+    def __call__(cls, *args, **kwargs):
+        key = cls.__singleton_key__(*args, **kwargs)
+        try:
+            return cls.__instances[key]
+        except KeyError:
+            # construct the object as normal
+            self = super(ParametrizedSingleton, cls).__call__(*args, **kwargs)
+            cls.__instances[key] = self
+            return self
+
+
+
+def reject_remaining_kwargs(name, kwargs):
+    """
+    Helper function to emulate Python 3 keyword-only arguments.
+
+    Use as::
+
+        def func(x1, **kwargs):
+            a = kwargs.pop('a', 1)
+            b = kwargs.pop('b', 2)
+            reject_remaining_kwargs('func', kwargs)
+            ...
+
+    To emulate the Python 3 syntax::
+
+        def func(x1, *, a=1, b=2):
+            ...
+    """
+    if kwargs:
+        # match the error message to what Python 3 produces
+        bad_arg = next(iter(kwargs))
+        raise TypeError(
+            '{}() got an unexpected keyword argument {!r}'.format(name, bad_arg)
+        )
+
+
+class lazy_property(object):
+    """
+    A property that is executed the first time, then cached forever.
+
+    It does this by replacing itself on the instance, which works because
+    unlike `@property` it does not define __set__.
+
+    This should be used for expensive members of objects that are not always
+    used.
+    """
+    def __init__(self, fget):
+        self.fget = fget
+
+        # copy the getter function's docstring and other attributes
+        functools.update_wrapper(self, fget)
+
+    def __get__(self, obj, cls):
+        if obj is None:
+            return self
+
+        value = self.fget(obj)
+        setattr(obj, self.fget.__name__, value)
+        return value
+
+
+def want_color_output():
+    """Return ``True`` if colored output is possible/requested and not running in GUI."""
+    want_color = sys.stdout.isatty()  # default to color for TTYs
+    if os.getenv("COCOTB_ANSI_OUTPUT", default='0') == '1':
+        want_color = True
+    if os.getenv("GUI", default='0') == '1':
+        want_color = False
+    return want_color
+        
+    
 if __name__ == "__main__":
     import random
     a = ""

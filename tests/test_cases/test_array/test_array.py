@@ -2,8 +2,8 @@
 A set of tests that demonstrate Array structure support
 """
 
-import cocotb
 import logging
+import cocotb
 
 from cocotb.clock import Clock
 from cocotb.triggers import Timer, RisingEdge
@@ -12,7 +12,7 @@ from cocotb.handle import HierarchyObject, HierarchyArrayObject, ModifiableObjec
 
 def _check_type(tlog, hdl, expected):
     if not isinstance(hdl, expected):
-        raise TestFailure(">{0!r} ({1})< should be >{2}<".format(hdl, hdl._type ,expected))
+        raise TestFailure(">{0!r} ({1})< should be >{2}<".format(hdl, hdl._type, expected))
     else:
         tlog.info("   Found %r (%s) with length=%d", hdl, hdl._type, len(hdl))
 
@@ -153,7 +153,9 @@ def test_read_write(dut):
 
     tlog.info("Writing a few signal sub-indices!!!")
     dut.sig_logic_vec[2]     = 0
-    if cocotb.LANGUAGE in ["vhdl"] or not cocotb.SIM_NAME.lower().startswith(("ncsim")):
+    if cocotb.LANGUAGE in ["vhdl"] or not (cocotb.SIM_NAME.lower().startswith(("ncsim", "xmsim")) or
+                                           (cocotb.SIM_NAME.lower().startswith(("riviera")) and
+                                            cocotb.SIM_VERSION.startswith(("2016.06", "2016.10", "2017.02")))):
         dut.sig_t6[1][3][2]      = 1
         dut.sig_t6[0][2][7]      = 0
 
@@ -166,12 +168,14 @@ def test_read_write(dut):
 
     tlog.info("Checking writes (2):")
     _check_logic(tlog, dut.port_logic_vec_out, 0xC8)
-    if cocotb.LANGUAGE in ["vhdl"] or not cocotb.SIM_NAME.lower().startswith(("ncsim")):
+    if cocotb.LANGUAGE in ["vhdl"] or not (cocotb.SIM_NAME.lower().startswith(("ncsim", "xmsim")) or
+                                           (cocotb.SIM_NAME.lower().startswith(("riviera")) and
+                                            cocotb.SIM_VERSION.startswith(("2016.06", "2016.10", "2017.02")))):
         _check_logic(tlog, dut.sig_t6[1][3][2], 1)
         _check_logic(tlog, dut.sig_t6[0][2][7], 0)
 
     if cocotb.LANGUAGE in ["vhdl"]:
-        _check_str (tlog, dut.port_str_out , "TEsting")
+        _check_str(tlog, dut.port_str_out, "Testing")
 
         _check_logic(tlog, dut.port_rec_out.b[1]     , 0xA3)
         _check_logic(tlog, dut.port_cmplx_out[1].b[1], 0xEE)
@@ -209,7 +213,7 @@ def test_gen_loop(dut):
     if len(dut.asc_gen) != 8:
         raise TestError("Length of asc_gen is >{}< and should be 8".format(len(dut.asc_gen)))
     else:
-       tlog.info("Length of asc_gen is %d", len(dut.asc_gen))
+        tlog.info("Length of asc_gen is %d", len(dut.asc_gen))
 
     for gens in dut.asc_gen:
         tlog.info("Iterate access found %s", gens)
@@ -259,6 +263,8 @@ def test_discover_all(dut):
                          149 (sig_t4[0:3][7:4][7:0])
                          112 (sig_t5[0:2][0:3][7:0])
                           57 (sig_t6[0:1][2:4][7:0])
+                         149 (sig_t7[3:0][3:0])                                      (VPI Only)
+                         149 ([3:0][3:0]sig_t8)                                      (VPI Only)
                            1 (sig_logic)
                            9 (sig_logic_vec)
                            1 (sig_bool)                                              (VHDL Only)
@@ -267,7 +273,7 @@ def test_discover_all(dut):
                            1 (sig_char)                                              (VHDL Only)
                            9 (sig_str)                                               (VHDL Only)
                           30 (sig_rec.a, sig_rec.b[0:2][7:0])                        (VPI doesn't find, added manually, except for Aldec)
-                          61 (sig_cmplx[0:1].a, sig_cmplx[0:1].b[0:2][7:0])          (VPI - Aldec doesn't find)
+                          61 (sig_cmplx[0:1].a, sig_cmplx[0:1].b[0:2][7:0])          (VPI - Aldec older than 2017.10.67 doesn't find)
                 regions:   9 (asc_gen[16:23])
                            8 (asc_gen: signals)                                      (VHPI - Riviera doesn't find, added manually)
                            8 (asc_gen: constant)
@@ -280,10 +286,10 @@ def test_discover_all(dut):
                            8 (desc_gen: process "always")                            (VPI - Aldec only)
                 process:   1 ("always")                                              (VPI - Aldec only)
 
-                  TOTAL: 856 (VHDL - Default)
-                         818 (VHDL - Aldec)
-                         780 (Verilog - Default)
-                         649 (Verilog - Aldec)
+                  TOTAL:  856 (VHDL - Default)
+                          818 (VHDL - Aldec)
+                         1078 (Verilog - Default)
+                     947/1038 (Verilog - Aldec)
     """
 
     tlog = logging.getLogger("cocotb.test")
@@ -293,7 +299,8 @@ def test_discover_all(dut):
     # Need to clear sub_handles so won't attempt to iterate over handles like sig_rec and sig_rec_array
     #
     # DO NOT REMOVE.  Aldec cannot iterate over the complex records due to bugs in the VPI interface.
-    if cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("riviera")):
+    if (cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("riviera")) and
+        cocotb.SIM_VERSION.startswith(("2016.02"))) :
         if len(dut._sub_handles) != 0:
             dut._sub_handles = {}
 
@@ -301,7 +308,7 @@ def test_discover_all(dut):
     # to ensure the handle is in the dut "sub_handles" for iterating
     #
     # DO NOT ADD FOR ALDEC.  Does not iterate over properly
-    if cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("modelsim","ncsim")):
+    if cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("modelsim", "ncsim", "xmsim")):
         dummy = dut.sig_rec
         dummy = dut.port_rec_out
 
@@ -317,17 +324,24 @@ def test_discover_all(dut):
     elif cocotb.LANGUAGE in ["vhdl"]:
         pass_total = 856
     elif cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("riviera")):
-        pass_total = 649
+        if cocotb.SIM_VERSION.startswith(("2017.10.61")):
+            pass_total = 803
+        elif cocotb.SIM_VERSION.startswith(("2016.06", "2016.10", "2017.02")):
+            pass_total = 813
+        elif cocotb.SIM_VERSION.startswith(("2016.02")):
+            pass_total = 947
+        else:
+            pass_total = 1038
     else:
-        pass_total = 780
+        pass_total = 1078
 
-    def _discover(obj,indent):
+    def _discover(obj, indent):
         count = 0
         new_indent = indent+"---"
         for thing in obj:
             count += 1
             tlog.info("%sFound %r (%s)", indent, thing, thing._type)
-            count += _discover(thing,new_indent)
+            count += _discover(thing, new_indent)
         return count
 
     tlog.info("Iterating over %r (%s)", dut, dut._type)
@@ -390,18 +404,18 @@ def test_direct_signal_indexing(dut):
 
     tlog.info("Checking bit mapping from input to generate loops.")
     if int(dut.desc_gen[2].sig) != 1:
-        raise TestFailure("Expected {0!r} to be a 1 but got {1}".format(dut.desc_gen[2].sig,int(dut.desc_gen[2].sig)))
+        raise TestFailure("Expected {0!r} to be a 1 but got {1}".format(dut.desc_gen[2].sig, int(dut.desc_gen[2].sig)))
     else:
         tlog.info("   %r = %d", dut.desc_gen[2].sig, int(dut.desc_gen[2].sig))
 
     if int(dut.asc_gen[18].sig) != 1:
-        raise TestFailure("Expected {0!r} to be a 1 but got {1}".format(dut.asc_gen[18].sig,int(dut.asc_gen[18].sig)))
+        raise TestFailure("Expected {0!r} to be a 1 but got {1}".format(dut.asc_gen[18].sig, int(dut.asc_gen[18].sig)))
     else:
         tlog.info("   %r = %d", dut.asc_gen[18].sig, int(dut.asc_gen[18].sig))
 
     tlog.info("Checking indexing of data with offset index.")
     if int(dut.port_ofst_out) != 64:
-        raise TestFailure("Expected {0!r} to be a 64 but got {0}".format(dut.port_ofst_out, int(dut.port_ofst_out)))
+        raise TestFailure("Expected {0!r} to be a 64 but got {1}".format(dut.port_ofst_out, int(dut.port_ofst_out)))
     else:
         tlog.info("   %r = %d (%s)", dut.port_ofst_out, int(dut.port_ofst_out), dut.port_ofst_out.value.binstr)
 
@@ -417,20 +431,36 @@ def test_direct_signal_indexing(dut):
     _check_type(tlog, dut.sig_t3a, NonHierarchyIndexableObject)
     _check_type(tlog, dut.sig_t4, NonHierarchyIndexableObject)
     _check_type(tlog, dut.sig_t4[3], NonHierarchyIndexableObject)
-    _check_type(tlog, dut.sig_t4[3][4], ModifiableObject)
-    _check_type(tlog, dut.sig_t4[3][4][1], ModifiableObject)
+    # the following version cannot index into those arrays and will error out
+    if not (cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("riviera")) and
+            cocotb.SIM_VERSION.startswith(("2016.06", "2016.10", "2017.02"))):
+        _check_type(tlog, dut.sig_t4[3][4], ModifiableObject)
+        _check_type(tlog, dut.sig_t4[3][4][1], ModifiableObject)
     _check_type(tlog, dut.sig_t5, NonHierarchyIndexableObject)
     _check_type(tlog, dut.sig_t5[1], NonHierarchyIndexableObject)
     _check_type(tlog, dut.sig_t5[1][0], ModifiableObject)
     _check_type(tlog, dut.sig_t5[1][0][6], ModifiableObject)
     _check_type(tlog, dut.sig_t6, NonHierarchyIndexableObject)
     _check_type(tlog, dut.sig_t6[1], NonHierarchyIndexableObject)
-    _check_type(tlog, dut.sig_t6[0][3], ModifiableObject)
-    _check_type(tlog, dut.sig_t6[0][3][7], ModifiableObject)
+    # the following version cannot index into those arrays and will error out
+    if not (cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("riviera")) and
+            cocotb.SIM_VERSION.startswith(("2016.06", "2016.10", "2017.02"))):
+        _check_type(tlog, dut.sig_t6[0][3], ModifiableObject)
+        _check_type(tlog, dut.sig_t6[0][3][7], ModifiableObject)
     _check_type(tlog, dut.sig_cmplx, NonHierarchyIndexableObject)
 
+    if cocotb.LANGUAGE in ["verilog"]:
+        _check_type(tlog, dut.sig_t7[1], NonHierarchyIndexableObject)
+        _check_type(tlog, dut.sig_t7[0][3], ModifiableObject)
+        _check_type(tlog, dut.sig_t8[1], NonHierarchyIndexableObject)
+        _check_type(tlog, dut.sig_t8[0][3], ModifiableObject)
+
+
     # Riviera has a bug and finds dut.sig_cmplx[1], but the type returned is a vpiBitVar
-    if not (cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("riviera"))):
+    # only true for version 2016.02
+    if not (cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("riviera")) and
+            cocotb.SIM_VERSION.startswith(("2016.02"))):
+
         _check_type(tlog, dut.sig_cmplx[1], HierarchyObject)
         _check_type(tlog, dut.sig_cmplx[1].a, ModifiableObject)
         _check_type(tlog, dut.sig_cmplx[1].b, NonHierarchyIndexableObject)
@@ -442,7 +472,9 @@ def test_direct_signal_indexing(dut):
     _check_type(tlog, dut.sig_rec.b, NonHierarchyIndexableObject)
 
     # Riviera has a bug and finds dut.sig_rec.b[1], but the type returned is 0 which is unknown
-    if not (cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("riviera"))):
+    # only true for version 2016.02
+    if not (cocotb.LANGUAGE in ["verilog"] and cocotb.SIM_NAME.lower().startswith(("riviera")) and
+            cocotb.SIM_VERSION.startswith(("2016.02"))):
         _check_type(tlog, dut.sig_rec.b[1], ModifiableObject)
         _check_type(tlog, dut.sig_rec.b[1][2], ModifiableObject)
 
