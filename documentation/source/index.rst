@@ -11,12 +11,17 @@ Contents:
    building
    coroutines
    triggers
+   testbench_tools
    library_reference
+   library_reference_c
    endian_swapper
    ping_tun_tap
-   hal_cosimulation 
-   roadmap
+   hal_cosimulation
+   examples
+   troubleshooting
    simulator_support
+   roadmap
+   release_notes
 
 
 

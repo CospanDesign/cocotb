@@ -169,7 +169,7 @@ localparam      REG_IMAGE_HEIGHT    = 5'h0D;
 
 localparam      MAX_ADDR            = REG_IMAGE_HEIGHT;
 
-//registes/wires
+//registers/wires
 
 //User Interface
 wire [ADDR_WIDTH - 1: 0]    w_reg_address;

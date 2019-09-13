@@ -1,46 +1,43 @@
-''' Copyright (c) 2013 Potential Ventures Ltd
-Copyright (c) 2013 SolarFlare Communications Inc
-All rights reserved.
+# Copyright (c) 2013, 2018 Potential Ventures Ltd
+# Copyright (c) 2013 SolarFlare Communications Inc
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#     * Redistributions of source code must retain the above copyright
+#       notice, this list of conditions and the following disclaimer.
+#     * Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in the
+#       documentation and/or other materials provided with the distribution.
+#     * Neither the name of Potential Ventures Ltd,
+#       SolarFlare Communications Inc nor the
+#       names of its contributors may be used to endorse or promote products
+#       derived from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL POTENTIAL VENTURES LTD BE LIABLE FOR ANY
+# DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+# SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in the
-      documentation and/or other materials provided with the distribution.
-    * Neither the name of Potential Ventures Ltd,
-      SolarFlare Communications Inc nor the
-      names of its contributors may be used to endorse or promote products
-      derived from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL POTENTIAL VENTURES LTD BE LIABLE FOR ANY
-DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. '''
-
-"""
-All things relating to regression capabilities
-"""
+"""All things relating to regression capabilities."""
 
 import time
-import logging
 import inspect
 from itertools import product
 import sys
 import os
 import traceback
-# For autodocumentation don't need the extension modules
-if "SPHINX_BUILD" in os.environ:
-    simulator = None
-else:
+
+if "COCOTB_SIM" in os.environ:
     import simulator
+else:
+    simulator = None
 
 # Optional support for coverage collection of testbench files
 coverage = None
@@ -48,7 +45,7 @@ if "COVERAGE" in os.environ:
     try:
         import coverage
     except ImportError as e:
-        msg = ("Coverage collection requested but coverage module not availble"
+        msg = ("Coverage collection requested but coverage module not available"
                "\n"
                "Import error was: %s\n" % repr(e))
         sys.stderr.write(msg)
@@ -59,6 +56,7 @@ from cocotb.log import SimLog
 from cocotb.result import TestError, TestFailure, TestSuccess, SimFailure
 from cocotb.utils import get_sim_time
 from cocotb.xunit_reporter import XUnitReporter
+from cocotb import _py_compat
 
 
 def _my_import(name):
@@ -75,9 +73,14 @@ class RegressionManager(object):
     def __init__(self, root_name, modules, tests=None, seed=None, hooks=[]):
         """
         Args:
-            modules (list): A list of python module names to run
-
-        Kwargs
+            root_name (str): The name of the root handle.
+            modules (list): A list of Python module names to run.
+            tests (list, optional): A list of tests to run.
+                Defaults to ``None``, meaning all discovered tests will be run.
+            seed (int,  optional): The seed for the random number generator to use.
+                Defaults to ``None``.
+            hooks (list, optional): A list of hook modules to import.
+                Defaults to the empty list.
         """
         self._queue = []
         self._root_name = root_name
@@ -98,14 +101,16 @@ class RegressionManager(object):
         self.count = 1
         self.skipped = 0
         self.failures = 0
-        self.xunit = XUnitReporter()
 
-        suite_name = os.getenv('RESULT_TESTSUITE') if os.getenv('RESULT_TESTSUITE') else "all"
-        package_name = os.getenv('RESULT_TESTPACKAGE') if os.getenv('RESULT_TESTPACKAGE') else "all"
-                
+        results_filename = os.getenv('COCOTB_RESULTS_FILE', "results.xml")
+        suite_name = os.getenv('RESULT_TESTSUITE', "all")
+        package_name = os.getenv('RESULT_TESTPACKAGE', "all")
+        
+        self.xunit = XUnitReporter(filename=results_filename)
+
         self.xunit.add_testsuite(name=suite_name, tests=repr(self.ntests),
                                  package=package_name)
-        
+
         if (self._seed is not None):
             self.xunit.add_property(name="random_seed", value=("%d"%self._seed))
 
@@ -129,7 +134,7 @@ class RegressionManager(object):
                 self.log.debug("PWD: " + os.getcwd())
                 module = _my_import(module_name)
             except Exception as E:
-                self.log.critical("Failed to import module %s: %s", (module_name, E))
+                self.log.critical("Failed to import module %s: %s", module_name, E)
                 self.log.info("MODULE variable was \"%s\"", ".".join(self._modules))
                 self.log.info("Traceback: ")
                 self.log.info(traceback.format_exc())
@@ -139,11 +144,17 @@ class RegressionManager(object):
 
                 # Specific functions specified, don't auto discover
                 for test in self._functions.rsplit(','):
-                    if not hasattr(module, test):
-                        raise AttributeError("Test %s doesn't exist in %s" %
-                                             (test, module_name))
+                    try:
+                        _test = getattr(module, test)
+                    except AttributeError:
+                        self.log.error("Requested test %s wasn't found in module %s", test, module_name)
+                        err = AttributeError("Test %s doesn't exist in %s" % (test, module_name))
+                        _py_compat.raise_from(err, None)  # discard nested traceback
 
-                    self._queue.append(getattr(module, test)(self._dut))
+                    if not hasattr(_test, "im_test"):
+                        self.log.error("Requested %s from module %s isn't a cocotb.test decorated coroutine", test, module_name)
+                        raise ImportError("Failed to find requested test %s" % test)
+                    self._queue.append(_test(self._dut))
                     self.ntests += 1
                 break
 
@@ -152,10 +163,10 @@ class RegressionManager(object):
                     try:
                         test = thing(self._dut)
                         skip = test.skip
-                    except TestError:
+                    except Exception:
                         skip = True
-                        self.log.warning("Failed to initialise test %s" %
-                                         thing.name)
+                        self.log.warning("Failed to initialize test %s" %
+                                         thing.name, exc_info=True)
 
                     if skip:
                         self.log.info("Skipping test %s" % thing.name)
@@ -171,8 +182,7 @@ class RegressionManager(object):
                         self._queue.append(test)
                         self.ntests += 1
 
-        self._queue.sort(key=lambda test: "%s.%s" %
-                         (test.module, test.funcname))
+        self._queue.sort(key=lambda test: test.sort_name())
 
         for valid_tests in self._queue:
             self.log.info("Found test %s.%s" %
@@ -206,7 +216,8 @@ class RegressionManager(object):
             self.log.info("Writing coverage data")
             self._cov.save()
             self._cov.html_report()
-        self._log_test_summary()
+        if len(self.test_results) > 0:
+            self._log_test_summary()
         self._log_sim_summary()
         self.log.info("Shutting down...")
         self.xunit.write()
@@ -224,43 +235,53 @@ class RegressionManager(object):
                                message="Test failed with random_seed={}".format(self._seed))
         self.failures += 1
 
-    def handle_result(self, result):
-        """Handle a test result
+    def handle_result(self, test):
+        """Handle a test completing.
 
-        Dumps result to XML and schedules the next test (if any)
+        Dump result to XML and schedule the next test (if any).
 
-        Args: result (TestComplete exception)
+        Args:
+            test: The test that completed
         """
-        real_time   = time.time() - self._running_test.start_time
-        sim_time_ns = get_sim_time('ns') - self._running_test.start_sim_time
-        ratio_time  = sim_time_ns / real_time
-        self.xunit.add_testcase(name=self._running_test.funcname,
-                                classname=self._running_test.module,
+        assert test is self._running_test
+
+        real_time   = time.time() - test.start_time
+        sim_time_ns = get_sim_time('ns') - test.start_sim_time
+        ratio_time  = self._safe_divide(sim_time_ns, real_time)
+        
+        self.xunit.add_testcase(name=test.funcname,
+                                classname=test.module,
                                 time=repr(real_time),
                                 sim_time_ns=repr(sim_time_ns),
                                 ratio_time=repr(ratio_time))
 
-        running_test_funcname = self._running_test.funcname
-
         # Helper for logging result
         def _result_was():
-            result_was = ("%s (result was %s)" %
-                          (running_test_funcname, result.__class__.__name__))
+            result_was = ("{} (result was {})".format
+                          (test.funcname, result.__class__.__name__))
             return result_was
 
         result_pass = True
 
+        # check what exception the test threw
+        try:
+            test._outcome.get()
+            raise TestSuccess()
+        except Exception as e:
+            result = e
+            exc_info = sys.exc_info()
+
         if (isinstance(result, TestSuccess) and
-                not self._running_test.expect_fail and
-                not self._running_test.expect_error):
-            self.log.info("Test Passed: %s" % running_test_funcname)
+                not test.expect_fail and
+                not test.expect_error):
+            self.log.info("Test Passed: %s" % test.funcname)
 
         elif (isinstance(result, TestFailure) and
-                self._running_test.expect_fail):
+                test.expect_fail):
             self.log.info("Test failed as expected: " + _result_was())
 
         elif (isinstance(result, TestSuccess) and
-              self._running_test.expect_error):
+              test.expect_error):
             self.log.error("Test passed but we expected an error: " +
                            _result_was())
             self._add_failure(result)
@@ -272,47 +293,45 @@ class RegressionManager(object):
             self._add_failure(result)
             result_pass = False
 
-        elif isinstance(result, TestError) and self._running_test.expect_error:
-            self.log.info("Test errored as expected: " + _result_was())
-
         elif isinstance(result, SimFailure):
-            if self._running_test.expect_error:
+            if test.expect_error:
                 self.log.info("Test errored as expected: " + _result_was())
             else:
-                self.log.error("Test error has lead to simulator shuttting us "
-                               "down")
+                self.log.error("Test error has lead to simulator shutting us "
+                               "down", exc_info=exc_info)
                 self._add_failure(result)
-                self._store_test_result(self._running_test.module, self._running_test.funcname, False, sim_time_ns, real_time, ratio_time)
+                self._store_test_result(test.module, test.funcname, False, sim_time_ns, real_time, ratio_time)
                 self.tear_down()
                 return
 
+        elif test.expect_error:
+            self.log.info("Test errored as expected: " + _result_was())
+
         else:
-            self.log.error("Test Failed: " + _result_was())
+            self.log.error("Test Failed: " + _result_was(), exc_info=exc_info)
             self._add_failure(result)
             result_pass = False
 
-        self._store_test_result(self._running_test.module, self._running_test.funcname, result_pass, sim_time_ns, real_time, ratio_time)
+        self._store_test_result(test.module, test.funcname, result_pass, sim_time_ns, real_time, ratio_time)
 
         self.execute()
 
     def execute(self):
-        self._running_test = cocotb.regression.next_test()
+        self._running_test = cocotb.regression_manager.next_test()
         if self._running_test:
             start = ''
             end   = ''
             if self.log.colour:
-                start = ANSI.BLUE_BG + ANSI.BLACK_FG
-                end   = ANSI.DEFAULT
+                start = ANSI.COLOR_TEST
+                end   = ANSI.COLOR_DEFAULT
             # Want this to stand out a little bit
             self.log.info("%sRunning test %d/%d:%s %s" %
                           (start,
                            self.count, self.ntests,
                            end,
                            self._running_test.funcname))
-            if self.count is 1:
-                test = cocotb.scheduler.add(self._running_test)
-            else:
-                test = cocotb.scheduler.new_test(self._running_test)
+
+            cocotb.scheduler.add_test(self._running_test)
             self.count += 1
         else:
             self.tear_down()
@@ -352,7 +371,7 @@ class RegressionManager(object):
             else:
                 pass_fail_str = "FAIL"
                 if self.log.colour:
-                    hilite = ANSI.WHITE_FG + ANSI.RED_BG
+                    hilite = ANSI.COLOR_HILITE_SUMMARY
 
             summary += "{start}** {a:<{a_len}}  {b:^{b_len}}  {c:>{c_len}.2f}   {d:>{d_len}.2f}   {e:>{e_len}.2f}  **\n".format(a=result['test'],   a_len=TEST_FIELD_LEN,
                                                                                                                                 b=pass_fail_str,    b_len=RESULT_FIELD_LEN,
@@ -367,7 +386,7 @@ class RegressionManager(object):
     def _log_sim_summary(self):
         real_time   = time.time() - self.start_time
         sim_time_ns = get_sim_time('ns')
-        ratio_time  = sim_time_ns / real_time
+        ratio_time  = self._safe_divide(sim_time_ns, real_time)
 
         summary = ""
 
@@ -380,7 +399,17 @@ class RegressionManager(object):
         summary += "*************************************************************************************\n"
 
         self.log.info(summary)
-
+    
+    @staticmethod
+    def _safe_divide(a, b):
+        try:
+            return a / b
+        except ZeroDivisionError:
+            if a == 0:
+                return float('nan')
+            else:
+                return float('inf')
+    
     def _store_test_result(self, module_name, test_name, result_pass, sim_time, real_time, ratio):
         result = {
             'test'  : '.'.join([module_name, test_name]),
@@ -392,27 +421,21 @@ class RegressionManager(object):
 
 
 def _create_test(function, name, documentation, mod, *args, **kwargs):
-    """Factory function to create tests, avoids late binding
+    """Factory function to create tests, avoids late binding.
 
     Creates a test dynamically.  The test will call the supplied
     function with the supplied arguments.
 
     Args:
-        function: (function)    the test function to run
-
-        name: (string)          the name of the test
-
-        documentation: (string) the docstring for the test
-
-        mod: (module)           the module this function belongs to
-
-        *args:                  remaining args to pass to test function
-
-    Kwaygs:
-        **kwargs:               passed to the test function
+        function (function):  The test function to run.
+        name (str):           The name of the test.
+        documentation (str):  The docstring for the test.
+        mod (module):         The module this function belongs to.
+        *args:                Remaining args to pass to test function.
+        **kwargs:             Passed to the test function.
 
     Returns:
-        decorated test function
+        Decorated test function
     """
     def _my_test(dut):
         yield function(dut, *args, **kwargs)
@@ -424,9 +447,7 @@ def _create_test(function, name, documentation, mod, *args, **kwargs):
 
 
 class TestFactory(object):
-
-    """
-    Used to automatically generate tests.
+    """Used to automatically generate tests.
 
     Assuming we have a common test function that will run a test. This test
     function will take keyword arguments (for example generators for each of
@@ -436,7 +457,7 @@ class TestFactory(object):
     permutations of the possible arguments to the test function.
 
     For example if we have a module that takes backpressure and idles and
-    have some packet generations routines gen_a and gen_b.
+    have some packet generation routines ``gen_a`` and ``gen_b``:
 
     >>> tf = TestFactory(run_test)
     >>> tf.add_option('data_in', [gen_a, gen_b])
@@ -445,18 +466,18 @@ class TestFactory(object):
     >>> tf.generate_tests()
 
     We would get the following tests:
-        * gen_a with no backpressure and no idles
-        * gen_a with no backpressure and random_idles
-        * gen_a with random_backpressure and no idles
-        * gen_a with random_backpressure and random_idles
-        * gen_b with no backpressure and no idles
-        * gen_b with no backpressure and random_idles
-        * gen_b with random_backpressure and no idles
-        * gen_b with random_backpressure and random_idles
+        * ``gen_a`` with no backpressure and no idles
+        * ``gen_a`` with no backpressure and ``random_idles``
+        * ``gen_a`` with ``random_backpressure`` and no idles
+        * ``gen_a`` with ``random_backpressure`` and ``random_idles``
+        * ``gen_b`` with no backpressure and no idles
+        * ``gen_b`` with no backpressure and ``random_idles``
+        * ``gen_b`` with ``random_backpressure`` and no idles
+        * ``gen_b`` with ``random_backpressure`` and ``random_idles``
 
     The tests are appended to the calling module for auto-discovery.
 
-    Tests are simply named test_function_N. The docstring for the test (hence
+    Tests are simply named ``test_function_N``. The docstring for the test (hence
     the test description) includes the name and description of each generator.
     """
 
@@ -483,35 +504,36 @@ class TestFactory(object):
         self.args = args
         self.kwargs_constant = kwargs
         self.kwargs = {}
+        self.log = SimLog("cocotb.regression")
 
     def add_option(self, name, optionlist):
         """Add a named option to the test.
 
         Args:
-           name (string): name of the option. passed to test as a keyword
-                          argument
+           name (str): Name of the option. Passed to test as a keyword
+                          argument.
 
-           optionlist (list): A list of possible options for this test knob
+           optionlist (list): A list of possible options for this test knob.
         """
         self.kwargs[name] = optionlist
 
     def generate_tests(self, prefix="", postfix=""):
         """
-        Generates exhasutive set of tests using the cartesian product of the
+        Generates exhaustive set of tests using the cartesian product of the
         possible keyword arguments.
 
         The generated tests are appended to the namespace of the calling
         module.
 
         Args:
-            prefix:  Text string to append to start of test_function name
+            prefix (str):  Text string to append to start of ``test_function`` name
                      when naming generated test cases. This allows reuse of
-                     a single test_function with multiple TestFactories without
-                     name clashes.
-            postfix: Text string to append to end of test_function name
+                     a single ``test_function`` with multiple
+                     :class:`TestFactories <.TestFactory>` without name clashes.
+            postfix (str): Text string to append to end of ``test_function`` name
                      when naming generated test cases. This allows reuse of
-                     a single test_function with multiple TestFactories without
-                     name clashes.
+                     a single ``test_function`` with multiple
+                     :class:`TestFactories <.TestFactory>` without name clashes.
         """
 
         frm = inspect.stack()[1]
@@ -538,14 +560,14 @@ class TestFactory(object):
                 else:
                     doc += "\t%s: %s\n" % (optname, repr(optvalue))
 
-            cocotb.log.debug("Adding generated test \"%s\" to module \"%s\"" %
+            self.log.debug("Adding generated test \"%s\" to module \"%s\"" %
                              (name, mod.__name__))
             kwargs = {}
             kwargs.update(self.kwargs_constant)
             kwargs.update(testoptions)
             if hasattr(mod, name):
-                cocotb.log.error("Overwriting %s in module %s. "
-                                 "This causes previously defined testcase "
+                self.log.error("Overwriting %s in module %s. "
+                                 "This causes a previously defined testcase "
                                  "not to be run. Consider setting/changing "
                                  "name_postfix" % (name, mod))
             setattr(mod, name, _create_test(self.test_function, name, doc, mod,

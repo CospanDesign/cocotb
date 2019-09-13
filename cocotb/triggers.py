@@ -1,89 +1,145 @@
-''' Copyright (c) 2013 Potential Ventures Ltd
-Copyright (c) 2013 SolarFlare Communications Inc
-All rights reserved.
+# Copyright (c) 2013 Potential Ventures Ltd
+# Copyright (c) 2013 SolarFlare Communications Inc
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#     * Redistributions of source code must retain the above copyright
+#       notice, this list of conditions and the following disclaimer.
+#     * Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in the
+#       documentation and/or other materials provided with the distribution.
+#     * Neither the name of Potential Ventures Ltd,
+#       SolarFlare Communications Inc nor the
+#       names of its contributors may be used to endorse or promote products
+#       derived from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL POTENTIAL VENTURES LTD BE LIABLE FOR ANY
+# DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+# SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in the
-      documentation and/or other materials provided with the distribution.
-    * Neither the name of Potential Ventures Ltd,
-      SolarFlare Communications Inc nor the
-      names of its contributors may be used to endorse or promote products
-      derived from this software without specific prior written permission.
+"""A collections of triggers which a testbench can yield."""
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL POTENTIAL VENTURES LTD BE LIABLE FOR ANY
-DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. '''
-
-"""
-    A collections of triggers which a testbench can 'yield'
-"""
 import os
+import sys
+import textwrap
+import abc
 
-# For autodocumentation don't need the extension modules
-if "SPHINX_BUILD" in os.environ:
-    simulator = None
-else:
+if "COCOTB_SIM" in os.environ:
     import simulator
+else:
+    simulator = None
+
 from cocotb.log import SimLog
-from cocotb.result import raise_error
-from cocotb.utils import get_sim_steps, get_time_from_sim_steps
+from cocotb.result import raise_error, ReturnValue
+from cocotb.utils import (
+    get_sim_steps, get_time_from_sim_steps, ParametrizedSingleton,
+    lazy_property,
+)
+from cocotb import decorators
+from cocotb import outcomes
+from cocotb import _py_compat
+import cocotb
 
 
 class TriggerException(Exception):
     pass
 
+class Trigger(_py_compat.with_metaclass(abc.ABCMeta)):
+    """Base class to derive from."""
 
-class Trigger(object):
-    """Base class to derive from"""
+    # __dict__ is needed here for the `.log` lazy_property below to work.
+    # The implementation of `_PyObject_GenericGetAttrWithDict` suggests that
+    # despite its inclusion, __slots__ will overall give speed and memory
+    # improvements:
+    #  - the `__dict__` is not actually constructed until it's needed, and that
+    #    only happens if the `.log` attribute is used, where performance
+    #    concerns no longer matter.
+    #  - Attribute setting and getting will still go through the slot machinery
+    #    first, as "data descriptors" take priority over dict access
+    __slots__ = ('primed', '__weakref__', '__dict__')
+
     def __init__(self):
-        self.log = SimLog("cocotb.%s" % (self.__class__.__name__), id(self))
-        self.signal = None
         self.primed = False
 
-    def prime(self, *args):
+    @lazy_property
+    def log(self):
+        return SimLog("cocotb.%s" % (self.__class__.__name__), id(self))
+
+    @abc.abstractmethod
+    def prime(self, callback):
+        """Set a callback to be invoked when the trigger fires.
+
+        The callback will be invoked with a single argumement, `self`.
+
+        Subclasses must override this, but should end by calling the base class
+        method.
+
+        Do not call this directly within coroutines, it is intended to be used
+        only by the scheduler.
+        """
         self.primed = True
 
     def unprime(self):
-        """Remove any pending callbacks if necessary"""
+        """Remove the callback, and perform cleanup if necessary.
+
+        After being unprimed, a Trigger may be reprimed again in future.
+        Calling `unprime` multiple times is allowed, subsequent calls should be
+        a no-op.
+
+        Subclasses may override this, but should end by calling the base class
+        method.
+
+        Do not call this directly within coroutines, it is intended to be used
+        only by the scheduler.
+        """
         self.primed = False
 
     def __del__(self):
-        """Ensure if a trigger drops out of scope we remove any pending
-        callbacks"""
+        # Ensure if a trigger drops out of scope we remove any pending callbacks
         self.unprime()
 
     def __str__(self):
         return self.__class__.__name__
 
+    @property
+    def _outcome(self):
+        """The result that `yield this_trigger` produces in a coroutine.
+
+        The default is to produce the trigger itself, which is done for
+        ease of use with :class:`~cocotb.triggers.First`.
+        """
+        return outcomes.Value(self)
+
+    # Once 2.7 is dropped, this can be run unconditionally
+    if sys.version_info >= (3, 3):
+        _py_compat.exec_(textwrap.dedent("""
+        def __await__(self):
+            # hand the trigger back to the scheduler trampoline
+            return (yield self)
+        """))
+
 
 class PythonTrigger(Trigger):
-    """Python triggers don't use GPI at all
+    """Python triggers don't use GPI at all.
 
-        For example notification of coroutine completion etc
-
-        TODO:
-            Still need to implement unprime
-        """
-    pass
+    For example notification of coroutine completion etc.
+    """
 
 
 class GPITrigger(Trigger):
+    """Base Trigger class for GPI triggers.
+    Consumes simulation time.
     """
-    Base Trigger class for GPI triggers
+    __slots__ = ('cbhdl',)
 
-    Consumes simulation time
-    """
     def __init__(self):
         Trigger.__init__(self)
 
@@ -91,317 +147,211 @@ class GPITrigger(Trigger):
         # if simulator is not None:
         #    self.cbhdl = simulator.create_callback(self)
         # else:
-        self.cbhdl = None
+        self.cbhdl = 0
 
     def unprime(self):
         """Disable a primed trigger, can be reprimed"""
-        if self.cbhdl:
+        if self.cbhdl != 0:
             simulator.deregister_callback(self.cbhdl)
-        self.cbhdl = None
+        self.cbhdl = 0
         Trigger.unprime(self)
 
     def __del__(self):
         """Remove knowledge of the trigger"""
-        if self.cbhdl is not None:
+        if self.cbhdl != 0:
             self.unprime()
         Trigger.__del__(self)
 
 
 class Timer(GPITrigger):
-    """
-    Execution will resume when the specified time period expires
-
-    Consumes simulation time
-    """
+    """Fires after the specified simulation time period has elapsed."""
     def __init__(self, time_ps, units=None):
         GPITrigger.__init__(self)
         self.sim_steps = get_sim_steps(time_ps, units)
 
     def prime(self, callback):
         """Register for a timed callback"""
-        if self.cbhdl is None:
+        if self.cbhdl == 0:
             self.cbhdl = simulator.register_timed_callback(self.sim_steps,
                                                            callback, self)
-            if self.cbhdl is None:
+            if self.cbhdl == 0:
                 raise_error(self, "Unable set up %s Trigger" % (str(self)))
-        Trigger.prime(self)
+        GPITrigger.prime(self, callback)
 
     def __str__(self):
-        return self.__class__.__name__ + "(%1.2fps)" % get_time_from_sim_steps(self.sim_steps,units='ps')
+        return self.__class__.__name__ + "(%1.2fps)" % get_time_from_sim_steps(self.sim_steps, units='ps')
 
-class _ReadOnly(GPITrigger):
+
+# This is needed to make our custom metaclass work with abc.ABCMeta used in the
+# `Trigger` base class.
+class _ParameterizedSingletonAndABC(ParametrizedSingleton, abc.ABCMeta):
+    pass
+
+
+class ReadOnly(_py_compat.with_metaclass(_ParameterizedSingletonAndABC, GPITrigger)):
+    """Fires when the current simulation timestep moves to the readonly phase.
+
+    The :any:`ReadOnly` phase is entered when the current timestep no longer has any further delta steps.
+    This will be a point where all the signal values are stable as there are no more RTL events scheduled for the timestep.
+    The simulator will not allow scheduling of more events in this timestep.
+    Useful for monitors which need to wait for all processes to execute (both RTL and cocotb) to ensure sampled signal values are final.
     """
-    Execution will resume when the readonly portion of the sim cycles is
-    readched
-    """
+    __slots__ = ()
+
+    @classmethod
+    def __singleton_key__(cls):
+        return None
+
     def __init__(self):
         GPITrigger.__init__(self)
 
     def prime(self, callback):
-        if self.cbhdl is None:
+        if self.cbhdl == 0:
             self.cbhdl = simulator.register_readonly_callback(callback, self)
-            if self.cbhdl is None:
+            if self.cbhdl == 0:
                 raise_error(self, "Unable set up %s Trigger" % (str(self)))
-        Trigger.prime(self)
+        GPITrigger.prime(self, callback)
 
     def __str__(self):
         return self.__class__.__name__ + "(readonly)"
 
-_ro = _ReadOnly()
 
+class ReadWrite(_py_compat.with_metaclass(_ParameterizedSingletonAndABC, GPITrigger)):
+    """Fires when the readwrite portion of the sim cycles is reached."""
+    __slots__ = ()
 
-def ReadOnly():
-    return _ro
+    @classmethod
+    def __singleton_key__(cls):
+        return None
 
-
-class _ReadWrite(GPITrigger):
-    """
-    Execution will resume when the readwrite porttion of the sim cycles is
-    reached
-    """
     def __init__(self):
         GPITrigger.__init__(self)
 
     def prime(self, callback):
-        if self.cbhdl is None:
+        if self.cbhdl == 0:
             # import pdb
             # pdb.set_trace()
             self.cbhdl = simulator.register_rwsynch_callback(callback, self)
-            if self.cbhdl is None:
+            if self.cbhdl == 0:
                 raise_error(self, "Unable set up %s Trigger" % (str(self)))
-        Trigger.prime(self)
+        GPITrigger.prime(self, callback)
 
     def __str__(self):
         return self.__class__.__name__ + "(readwritesync)"
 
-_rw = _ReadWrite()
 
+class NextTimeStep(_py_compat.with_metaclass(_ParameterizedSingletonAndABC, GPITrigger)):
+    """Fires when the next time step is started."""
+    __slots__ = ()
 
-def ReadWrite():
-    return _rw
+    @classmethod
+    def __singleton_key__(cls):
+        return None
 
-
-class _NextTimeStep(GPITrigger):
-    """
-    Execution will resume when the next time step is started
-    """
     def __init__(self):
         GPITrigger.__init__(self)
 
     def prime(self, callback):
-        if self.cbhdl is None:
+        if self.cbhdl == 0:
             self.cbhdl = simulator.register_nextstep_callback(callback, self)
-            if self.cbhdl is None:
+            if self.cbhdl == 0:
                 raise_error(self, "Unable set up %s Trigger" % (str(self)))
-        Trigger.prime(self)
+        GPITrigger.prime(self, callback)
 
     def __str__(self):
         return self.__class__.__name__ + "(nexttimestep)"
 
-_nxts = _NextTimeStep()
 
+class _EdgeBase(_py_compat.with_metaclass(_ParameterizedSingletonAndABC, GPITrigger)):
+    """Internal base class that fires on a given edge of a signal."""
+    __slots__ = ('signal',)
 
-def NextTimeStep():
-    return _nxts
+    @classmethod
+    @property
+    def _edge_type(self):
+        """The edge type, as understood by the C code. Must be set in subclasses."""
+        raise NotImplementedError
 
+    @classmethod
+    def __singleton_key__(cls, signal):
+        return signal
 
-class _Edge(GPITrigger):
-    """
-    Execution will resume when an edge occurs on the provided signal
-    """
     def __init__(self, signal):
-        GPITrigger.__init__(self)
+        super(_EdgeBase, self).__init__()
         self.signal = signal
 
     def prime(self, callback):
         """Register notification of a value change via a callback"""
-        if self.cbhdl is None:
-            self.cbhdl = simulator.register_value_change_callback(self.signal.
-                                                                  _handle,
-                                                                  callback,
-                                                                  3,
-                                                                  self)
-            if self.cbhdl is None:
+        if self.cbhdl == 0:
+            self.cbhdl = simulator.register_value_change_callback(
+                self.signal._handle, callback, type(self)._edge_type, self
+            )
+            if self.cbhdl == 0:
                 raise_error(self, "Unable set up %s Trigger" % (str(self)))
-        Trigger.prime(self)
-
-    def __str__(self):
-        return self.__class__.__name__ + "(%s)" % self.signal._name
-
-def Edge(signal):
-    return signal._e_edge
-
-
-class _RisingOrFallingEdge(_Edge):
-    def __init__(self, signal, rising):
-        _Edge.__init__(self, signal)
-        if rising is True:
-            self._rising = 1
-        else:
-            self._rising = 2
-
-    def prime(self, callback):
-        if self.cbhdl is None:
-            self.cbhdl = simulator.register_value_change_callback(self.signal.
-                                                                  _handle,
-                                                                  callback,
-                                                                  self._rising,
-                                                                  self)
-            if self.cbhdl is None:
-                raise_error(self, "Unable set up %s Trigger" % (str(self)))
-        Trigger.prime(self)
+        super(_EdgeBase, self).prime(callback)
 
     def __str__(self):
         return self.__class__.__name__ + "(%s)" % self.signal._name
 
 
-class _RisingEdge(_RisingOrFallingEdge):
-    """
-    Execution will resume when a rising edge occurs on the provided signal
-    """
-    def __init__(self, signal):
-        _RisingOrFallingEdge.__init__(self, signal, rising=True)
+class RisingEdge(_EdgeBase):
+    """Fires on the rising edge of *signal*, on a transition from ``0`` to ``1``."""
+    __slots__ = ()
+    _edge_type = 1
 
 
-def RisingEdge(signal):
-    return signal._r_edge
+class FallingEdge(_EdgeBase):
+    """Fires on the falling edge of *signal*, on a transition from ``1`` to ``0``."""
+    __slots__ = ()
+    _edge_type = 2
 
 
-class _FallingEdge(_RisingOrFallingEdge):
-    """
-    Execution will resume when a falling edge occurs on the provided signal
-    """
-    def __init__(self, signal):
-        _RisingOrFallingEdge.__init__(self, signal, rising=False)
-
-
-def FallingEdge(signal):
-    return signal._f_edge
-
-
-class ClockCycles(_Edge):
-    """
-    Execution will resume after N rising edges or N falling edges
-    """
-    def __init__(self, signal, num_cycles, rising=True):
-        _Edge.__init__(self, signal)
-        self.num_cycles = num_cycles
-        if rising is True:
-            self._rising = 1
-        else:
-            self._rising = 2
-
-    def prime(self, callback):
-        self._callback = callback
-
-        def _check(obj):
-            self.unprime()
-
-            if self.signal.value:
-                self.num_cycles -= 1
-
-                if self.num_cycles <= 0:
-                    self._callback(self)
-                    return
-
-            self.cbhdl = simulator.register_value_change_callback(self.signal.
-                                                                  _handle,
-                                                                  _check,
-                                                                  self._rising,
-                                                                  self)
-            if self.cbhdl is None:
-                raise_error(self, "Unable set up %s Trigger" % (str(self)))
-
-        self.cbhdl = simulator.register_value_change_callback(self.signal.
-                                                              _handle,
-                                                              _check,
-                                                              self._rising,
-                                                              self)
-        if self.cbhdl is None:
-            raise_error(self, "Unable set up %s Trigger" % (str(self)))
-        Trigger.prime(self)
-
-    def __str__(self):
-        return self.__class__.__name__ + "(%s)" % self.signal._name
-
-
-class Combine(PythonTrigger):
-    """
-    Combines multiple triggers together.  Coroutine will continue when all
-    triggers have fired
-    """
-
-    def __init__(self, *args):
-        PythonTrigger.__init__(self)
-        self._triggers = args
-        # TODO: check that trigger is an iterable containing
-        # only Trigger objects
-        try:
-            for trigger in self._triggers:
-                if not isinstance(trigger, Trigger):
-                    raise TriggerException("All combined triggers must be "
-                                           "instances of Trigger! Got: %s" %
-                                           trigger.__class__.__name__)
-        except Exception:
-            raise TriggerException("%s requires a list of Trigger objects" %
-                                   self.__class__.__name__)
-
-    def prime(self, callback):
-        self._callback = callback
-        self._fired = []
-        for trigger in self._triggers:
-            trigger.prime(self._check_all_fired)
-        Trigger.prime(self)
-
-    def _check_all_fired(self, trigger):
-        self._fired.append(trigger)
-        if self._fired == self._triggers:
-            self._callback(self)
-
-    def unprime(self):
-        for trigger in self._triggers:
-            trigger.unprime()
+class Edge(_EdgeBase):
+    """Fires on any value change of *signal*."""
+    __slots__ = ()
+    _edge_type = 3
 
 
 class _Event(PythonTrigger):
-    """
-    Unique instance used by the Event object.
+    """Unique instance used by the Event object.
 
     One created for each attempt to wait on the event so that the scheduler
-    can maintain a dictionary of indexing each individual coroutine
+    can maintain a dictionary of indexing each individual coroutine.
 
     FIXME: This will leak - need to use peers to ensure everything is removed
     """
+
     def __init__(self, parent):
         PythonTrigger.__init__(self)
         self.parent = parent
 
     def prime(self, callback):
         self._callback = callback
-        self.parent.prime(callback, self)
-        Trigger.prime(self)
+        self.parent._prime_trigger(self, callback)
+        Trigger.prime(self, callback)
 
     def __call__(self):
         self._callback(self)
 
 
-class Event(PythonTrigger):
+class Event(object):
+    """Event to permit synchronisation between two coroutines.
+
+    Yielding :meth:`wait()` from one coroutine will block the coroutine until
+    :meth:`set()` is called somewhere else.
     """
-    Event to permit synchronisation between two coroutines
-    """
+
     def __init__(self, name=""):
-        PythonTrigger.__init__(self)
         self._pending = []
         self.name = name
         self.fired = False
         self.data = None
 
-    def prime(self, callback, trigger):
+    def _prime_trigger(self, trigger, callback):
         self._pending.append(trigger)
-        Trigger.prime(self)
 
     def set(self, data=None):
-        """Wake up any coroutines blocked on this event"""
+        """Wake up all coroutines blocked on this event."""
         self.fired = True
         self.data = data
 
@@ -413,14 +363,22 @@ class Event(PythonTrigger):
             trigger()
 
     def wait(self):
-        """This can be yielded to block this coroutine
-        until another wakes it"""
+        """Get a trigger which fires when another coroutine sets the event.
+
+        If the event has already been set, the trigger will fire immediately.
+
+        To reset the event (and enable the use of ``wait`` again),
+        :meth:`clear` should be called.
+        """
+        if self.fired:
+            return NullTrigger(name="{}.wait()".format(str(self)))
         return _Event(self)
 
     def clear(self):
-        """Clear this event that's fired.
+        """Clear this event that has fired.
 
-        Subsequent calls to wait will block until set() is called again"""
+        Subsequent calls to :meth:`~cocotb.triggers.Event.wait` will block until
+        :meth:`~cocotb.triggers.Event.set` is called again."""
         self.fired = False
 
     def __str__(self):
@@ -428,42 +386,46 @@ class Event(PythonTrigger):
 
 
 class _Lock(PythonTrigger):
-    """
-    Unique instance used by the Lock object.
+    """Unique instance used by the Lock object.
 
     One created for each attempt to acquire the Lock so that the scheduler
-    can maintain a dictionary of indexing each individual coroutine
+    can maintain a dictionary of indexing each individual coroutine.
 
-    FIXME: This will leak - need to use peers to ensure everything is removed
+    FIXME: This will leak - need to use peers to ensure everything is removed.
     """
+
     def __init__(self, parent):
         PythonTrigger.__init__(self)
         self.parent = parent
 
     def prime(self, callback):
         self._callback = callback
-        self.parent.prime(callback, self)
-        Trigger.prime(self)
+        self.parent._prime_trigger(self, callback)
+        Trigger.prime(self, callback)
 
     def __call__(self):
         self._callback(self)
 
 
-class Lock(PythonTrigger):
-    """
-    Lock primitive (not re-entrant)
+class Lock(object):
+    """Lock primitive (not re-entrant).
+
+    This should be used as::
+
+        yield lock.acquire()
+        try:
+            # do some stuff
+        finally:
+            lock.release()
     """
 
     def __init__(self, name=""):
-        PythonTrigger.__init__(self)
         self._pending_unprimed = []
         self._pending_primed = []
         self.name = name
-        self.locked = False
+        self.locked = False  #: True if the lock is held
 
-    def prime(self, callback, trigger):
-        Trigger.prime(self)
-
+    def _prime_trigger(self, trigger, callback):
         self._pending_unprimed.remove(trigger)
 
         if not self.locked:
@@ -473,13 +435,13 @@ class Lock(PythonTrigger):
             self._pending_primed.append(trigger)
 
     def acquire(self):
-        """This can be yielded to block until the lock is acquired"""
+        """ Produce a trigger which fires when the lock is acquired. """
         trig = _Lock(self)
         self._pending_unprimed.append(trig)
         return trig
 
     def release(self):
-
+        """Release the lock."""
         if not self.locked:
             raise_error(self, "Attempt to release an unacquired Lock %s" %
                         (str(self)))
@@ -503,41 +465,262 @@ class Lock(PythonTrigger):
         """Provide boolean of a Lock"""
         return self.locked
 
+    __bool__ = __nonzero__
+
 
 class NullTrigger(Trigger):
+    """Fires immediately.
+
+    Primarily for internal scheduler use.
     """
-    Trigger for internal interfacing use call the callback as soon
-    as it is primed and then remove it's self from the scheduler
-    """
-    def __init__(self, name=""):
-        Trigger.__init__(self)
+    def __init__(self, name="", outcome=None):
+        super(NullTrigger, self).__init__()
         self._callback = None
         self.name = name
+        self.__outcome = outcome
+
+    @property
+    def _outcome(self):
+        if self.__outcome is not None:
+            return self.__outcome
+        return super(NullTrigger, self)._outcome
 
     def prime(self, callback):
         callback(self)
 
+    def __str__(self):
+        return self.__class__.__name__ + "(%s)" % self.name
 
-class _Join(PythonTrigger):
+
+class Join(_py_compat.with_metaclass(_ParameterizedSingletonAndABC, PythonTrigger)):
+    r"""Fires when a :func:`fork`\ ed coroutine completes
+
+    The result of blocking on the trigger can be used to get the coroutine
+    result::
+
+        @cocotb.coroutine()
+        def coro_inner():
+            yield Timer(1)
+            raise ReturnValue("Hello world")
+
+        task = cocotb.fork(coro_inner())
+        result = yield Join(task)
+        assert result == "Hello world"
+
+    Or using the syntax in Python 3.5 onwards:
+
+    .. code-block:: python3
+
+        @cocotb.coroutine()
+        async def coro_inner():
+            await Timer(1)
+            return "Hello world"
+
+        task = cocotb.fork(coro_inner())
+        result = await Join(task)
+        assert result == "Hello world"
+
+    If the coroutine threw an exception, the :keyword:`await` or :keyword:`yield`
+    will re-raise it.
+
     """
-    Join a coroutine, firing when it exits
-    """
+    __slots__ = ('_coroutine',)
+
+    @classmethod
+    def __singleton_key__(cls, coroutine):
+        return coroutine
+
     def __init__(self, coroutine):
-        PythonTrigger.__init__(self)
+        super(Join, self).__init__()
         self._coroutine = coroutine
-        self.pass_retval = True
+
+    @property
+    def _outcome(self):
+        return self._coroutine._outcome
 
     @property
     def retval(self):
+        """The return value of the joined coroutine.
+
+        .. note::
+            Typically there is no need to use this attribute - the
+            following code samples are equivalent::
+
+                forked = cocotb.fork(mycoro())
+                j = Join(forked)
+                yield j
+                result = j.retval
+
+            ::
+
+                forked = cocotb.fork(mycoro())
+                result = yield Join(forked)
+        """
         return self._coroutine.retval
 
-    # def prime(self, callback):
-        # """Register our calback for when the coroutine exits"""
-        # Trigger.prime(self)
+    def prime(self, callback):
+        if self._coroutine._finished:
+            callback(self)
+        else:
+            super(Join, self).prime(callback)
 
     def __str__(self):
         return self.__class__.__name__ + "(%s)" % self._coroutine.__name__
 
 
-def Join(coro):
-    return coro._join
+class Waitable(object):
+    """
+    Compatibility layer that emulates `collections.abc.Awaitable`.
+
+    This converts a `_wait` abstract method into a suitable `__await__` on
+    supporting Python versions (>=3.3).
+    """
+    __slots__ = ()
+    @decorators.coroutine
+    def _wait(self):
+        """
+        Should be implemented by the subclass. Called by `yield self` to
+        convert the waitable object into a coroutine.
+
+        ReturnValue can be used here.
+        """
+        raise NotImplementedError
+        yield
+
+    if sys.version_info >= (3, 3):
+        def __await__(self):
+            return self._wait().__await__()
+
+
+class _AggregateWaitable(Waitable):
+    """
+    Base class for Waitables that take mutiple triggers in their constructor
+    """
+    __slots__ = ('triggers',)
+
+    def __init__(self, *triggers):
+        self.triggers = tuple(triggers)
+
+        # Do some basic type-checking up front, rather than waiting until we
+        # yield them.
+        allowed_types = (Trigger, Waitable, decorators.RunningCoroutine)
+        for trigger in self.triggers:
+            if not isinstance(trigger, allowed_types):
+                raise TypeError(
+                    "All triggers must be instances of Trigger! Got: {}"
+                    .format(type(trigger).__name__)
+                )
+
+
+@decorators.coroutine
+def _wait_callback(trigger, callback):
+    """
+    Wait for a trigger, and call `callback` with the outcome of the yield.
+    """
+    try:
+        ret = outcomes.Value((yield trigger))
+    except BaseException as exc:
+        ret = outcomes.Error(exc)
+    callback(ret)
+
+
+class Combine(_AggregateWaitable):
+    """
+    Fires when all of *triggers* have fired.
+
+    Like most triggers, this simply returns itself.
+    """
+    __slots__ = ()
+
+    @decorators.coroutine
+    def _wait(self):
+        waiters = []
+        e = Event()
+        triggers = list(self.triggers)
+
+        # start a parallel task for each trigger
+        for t in triggers:
+            # t=t is needed for the closure to bind correctly
+            def on_done(ret, t=t):
+                triggers.remove(t)
+                if not triggers:
+                    e.set()
+                ret.get()  # re-raise any exception
+            waiters.append(cocotb.fork(_wait_callback(t, on_done)))
+
+        # wait for the last waiter to complete
+        yield e.wait()
+        raise ReturnValue(self)
+
+
+class First(_AggregateWaitable):
+    """
+    Fires when the first trigger in *triggers* fires.
+
+    Returns the result of the trigger that fired.
+
+    As a shorthand, ``t = yield [a, b]`` can be used instead of
+    ``t = yield First(a, b)``. Note that this shorthand is not available when
+    using :keyword:`await`.
+
+    .. note::
+        The event loop is single threaded, so while events may be simultaneous
+        in simulation time, they can never be simultaneous in real time.
+        For this reason, the value of ``t_ret is t1`` in the following example
+        is implementation-defined, and will vary by simulator::
+
+            t1 = Timer(10, units='ps')
+            t2 = Timer(10, units='ps')
+            t_ret = yield First(t1, t2)
+    """
+    __slots__ = ()
+
+    @decorators.coroutine
+    def _wait(self):
+        waiters = []
+        e = Event()
+        triggers = list(self.triggers)
+        completed = []
+        # start a parallel task for each trigger
+        for t in triggers:
+            def on_done(ret):
+                completed.append(ret)
+                e.set()
+            waiters.append(cocotb.fork(_wait_callback(t, on_done)))
+
+        # wait for a waiter to complete
+        yield e.wait()
+
+        # kill all the other waiters
+        # TODO: Should this kill the coroutines behind any Join triggers?
+        # Right now it does not.
+        for w in waiters:
+            w.kill()
+
+        # get the result from the first task
+        ret = completed[0]
+        raise ReturnValue(ret.get())
+
+
+class ClockCycles(Waitable):
+    """
+    Fires after *num_cycles* transitions of *signal* from ``0`` to ``1``.
+    """
+    def __init__(self, signal, num_cycles, rising=True):
+        """
+        :param rising: If true, the default, count rising edges. Otherwise,
+            count falling edges
+        """
+        self.signal = signal
+        self.num_cycles = num_cycles
+        if rising is True:
+            self._type = RisingEdge
+        else:
+            self._type = FallingEdge
+
+    @decorators.coroutine
+    def _wait(self):
+        trigger = self._type(self.signal)
+        for _ in range(self.num_cycles):
+            yield trigger
+        raise ReturnValue(self)

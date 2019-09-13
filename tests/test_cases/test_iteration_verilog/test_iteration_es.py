@@ -1,4 +1,4 @@
-''' Copyright (c) 2015 Potential Ventures Ltd
+''' Copyright (c) 2015, 2018 Potential Ventures Ltd
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -35,8 +35,10 @@ def recursive_discovery(dut):
     Recursively discover every single object in the design
     """
     if cocotb.SIM_NAME.lower().startswith(("modelsim",
-                                           "ncsim")):
-        # vpiAlways does not show up in IUS
+                                           "ncsim",
+                                           "xmsim",
+                                           "chronologic simulation vcs")):
+        # vpiAlways does not show up
         pass_total = 259
     else:
         pass_total = 265
