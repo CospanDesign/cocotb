@@ -44,7 +44,7 @@ class AXI4LiteMaster(BusDriver):
 
     TODO: Kill all pending transactions if reset is asserted.
     """
-    
+
     _signals = ["AWVALID", "AWADDR", "AWREADY",        # Write address channel
                 "WVALID", "WREADY", "WDATA", "WSTRB",  # Write data channel
                 "BVALID", "BREADY", "BRESP",           # Write response channel
@@ -123,10 +123,10 @@ class AXI4LiteMaster(BusDriver):
                 Default is no delay.
             sync (bool, optional): Wait for rising edge on clock initially.
                 Defaults to True.
-            
+
         Returns:
             BinaryValue: The write response value.
-            
+
         Raises:
             AXIProtocolError: If write response from AXI is not ``OKAY``.
         """
@@ -163,15 +163,15 @@ class AXI4LiteMaster(BusDriver):
     @cocotb.coroutine
     def read(self, address, sync=True):
         """Read from an address.
-        
+
         Args:
             address (int): The address to read from.
             sync (bool, optional): Wait for rising edge on clock initially.
                 Defaults to True.
-            
+
         Returns:
             BinaryValue: The read data value.
-            
+
         Raises:
             AXIProtocolError: If read response from AXI is not ``OKAY``.
         """
@@ -370,33 +370,54 @@ class AXI4StreamMaster(BusDriver):
     _signals = ["TVALID", "TREADY", "TDATA"]  # Write data channel
     _optional_signals = ["TLAST", "TKEEP", "TSTRB", "TID", "TDEST", "TUSER"]
 
-    def __init__(self, entity, name, clock, width=32):
+    def __init__(self, entity, name, clock, width=32, user_as_start = True):
         BusDriver.__init__(self, entity, name, clock)
         #Drive default values onto bus
         self.width = width
+        self.user_as_start = user_as_start
         self.strobe_width = width / 8
         self.bus.TVALID.setimmediatevalue(0)
-        self.bus.TLAST.setimmediatevalue(0)
         self.bus.TDATA.setimmediatevalue(0)
-        self.bus.TKEEP.setimmediatevalue(0)
-        self.bus.TID.setimmediatevalue(0)
-        self.bus.TDEST.setimmediatevalue(0)
-        self.bus.TUSER.setimmediatevalue(0)
+        if (hasattr(self.bus, "TLAST")):
+            self.bus.TLAST.setimmediatevalue(0)
+        if (hasattr(self.bus, "TKEEP")):
+            self.bus.TKEEP.setimmediatevalue(0)
+        if (hasattr(self.bus, "TID")):
+            self.bus.TID.setimmediatevalue(0)
+        if (hasattr(self.bus, "TDEST")):
+            self.bus.TDEST.setimmediatevalue(0)
+        if (hasattr(self.bus, "TUSER")):
+            self.bus.TUSER.setimmediatevalue(0)
+        elif not self.user_as_start:
+            raise AxiProtocolError("TUSER signal is required if user_as_start is set")
+        if (hasattr(self.bus, "TSTRB")):
+            self.bus.TSTRB.setimmediatevalue(0)
 
         self.write_data_busy = Lock("%s_wbusy" % name)
 
     @cocotb.coroutine
-    def write(self, data, byte_enable=-1, keep=1, tid=0, dest=0, user=0):
+    def write(self, data, byte_enable=-1, keep=-1, tid=0, dest=0, user=0):
         """
         Send the write data, with optional delay
         """
         yield self.write_data_busy.acquire()
         self.bus.TVALID <=  0
-        self.bus.TLAST  <=  0
-        self.bus.TID    <=  tid
-        self.bus.TDEST  <=  dest
-        self.bus.TUSER  <=  user
-        self.bus.TSTRB  <=  (1 << self.strobe_width) - 1
+        if (hasattr(self.bus, "TLAST")):
+            self.bus.TLAST  <=  0
+        if (hasattr(self.bus, "TID")):
+            self.bus.TID    <=  tid
+        if (hasattr(self.bus, "TDEST")):
+            self.bus.TDEST  <=  dest
+        if (hasattr(self.bus, "TUSER")):
+            if (self.user_as_start):
+                self.bus.TUSER  <=  user | 1
+            else:
+                self.bus.TUSER  <=  user
+        if (hasattr(self.bus, "TSTRB")):
+            self.bus.TSTRB  <=  (1 << self.strobe_width) - 1
+        if (hasattr(self.bus, "TKEEP")):
+            if (keep == -1):
+                self.bus.TKEEP  <=  (1 << self.strobe_width) - 1
         if byte_enable == -1:
             byte_enable = (self.width >> 3) - 1
 
@@ -413,7 +434,8 @@ class AXI4StreamMaster(BusDriver):
             self.bus.TVALID <=  1
             self.bus.TDATA  <= data[i]
             if i >= len(data) - 1:
-                self.bus.TLAST  <=  1;
+                if (hasattr(self.bus, "TLAST")):
+                    self.bus.TLAST  <=  1;
             yield ReadOnly()
             if not self.bus.TREADY.value:
                 while True:
@@ -424,12 +446,19 @@ class AXI4StreamMaster(BusDriver):
                         break
                 continue
             yield RisingEdge(self.clock)
+            if (hasattr(self.bus, "TUSER")):
+                if (self.user_as_start):
+                    val = int(self.bus.TUSER) & 0xFFFE #XXX: ASSUME MAX SIZE OF USER = 16bits
+                    self.bus.TUSER  <=  val
 
-        self.bus.TLAST  <=  0;
+
+        if (hasattr(self.bus, "TLAST")):
+            self.bus.TLAST  <=  0;
         self.bus.TVALID <=  0;
         yield RisingEdge(self.clock)
         self.write_data_busy.release()
-        self.bus.TSTRB  <=  0
+        if (hasattr(self.bus, "TSTRB")):
+            self.bus.TSTRB  <=  0
 
 
 class AXI4StreamSlave(BusDriver):
@@ -445,8 +474,11 @@ class AXI4StreamSlave(BusDriver):
         self.data = []
 
     @cocotb.coroutine
-    def read(self, wait_for_valid = False):
-        """Read a packe of data from the Axi Ingress stream"""
+    def read(self, wait_for_valid = False, length = 1):
+        """Read a packe of data from the Axi Ingress stream
+        If the stream does not use TLAST the length must be specified
+        """
+        count = 0
         yield self.read_data_busy.acquire()
         yield RisingEdge(self.clock)
 
@@ -459,28 +491,24 @@ class AXI4StreamSlave(BusDriver):
             yield RisingEdge(self.clock)
             self.bus.TREADY <=  1
 
-            while self.bus.TVALID.value:
-                yield RisingEdge(self.clock)
-                self.data.extend(self.bus.TDATA.value)
+
+        self.bus.TREADY <= 1
+
+        #If we are using TLAST we can wait for that
+        while self.bus.TVALID.value:
+            yield RisingEdge(self.clock)
+            self.data.extend(self.bus.TDATA.value)
+            if (hasattr(self.bus, "TLAST")):
                 if self.bus.TLAST.value:
                     break
-        else:
-            self.bus.TREADY <= 1
-
-            while True:
-                yield ReadOnly()
-                yield RisingEdge(self.clock)
-                if self.bus.TVALID.value:
-                    cocotb.log.debug("Found Valid")
+            else:
+                count = count + 1
+                if (count >= length):
                     break
-                yield RisingEdge(self.clock)
+                    
 
+        raise ReturnValue(self.data)
 
-            while self.bus.TVALID.value:
-                yield RisingEdge(self.clock)
-                self.data.extend(self.bus.TDATA.value)
-                if self.bus.TLAST.value:
-                    break
 
 
 
