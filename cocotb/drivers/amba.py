@@ -389,7 +389,7 @@ class AXI4StreamMaster(BusDriver):
         if (hasattr(self.bus, "TUSER")):
             self.bus.TUSER.setimmediatevalue(0)
         elif not self.user_as_start:
-            raise AxiProtocolError("TUSER signal is required if user_as_start is set")
+            raise AXIProtocolError("TUSER signal is required if user_as_start is set")
         if (hasattr(self.bus, "TSTRB")):
             self.bus.TSTRB.setimmediatevalue(0)
 
@@ -422,11 +422,11 @@ class AXI4StreamMaster(BusDriver):
             byte_enable = (self.width >> 3) - 1
 
         #Wait for the slave to assert tready
-        while True:
-            yield ReadOnly()
-            if self.bus.TREADY.value:
-                break
-            yield RisingEdge(self.clock)
+        #while True:
+        #    yield ReadOnly()
+        #    if self.bus.TREADY.value:
+        #        break
+        #    yield RisingEdge(self.clock)
 
         yield RisingEdge(self.clock)
         #every clock cycle update the data
@@ -471,14 +471,18 @@ class AXI4StreamSlave(BusDriver):
         self.width = width
         self.bus.TREADY <= 0;
         self.read_data_busy = Lock("%s_wbusy" % name)
-        self.data = []
 
     @cocotb.coroutine
-    def read(self, wait_for_valid = False, length = 1):
-        """Read a packe of data from the Axi Ingress stream
+    def read(self, wait_for_valid = False, length = 0):
+        """Read a packet of data from the Axi Ingress stream
         If the stream does not use TLAST the length must be specified
         """
+        #self.log.info("Length: %d, Has Attr: %s" % (length, str(hasattr(self.bus, "TLAST"))))
+        
+        if ((length < 1) and (not hasattr(self.bus, "TLAST"))):
+            raise AXIProtocolError("Either TLAST signal must be used or the user must specify the length of the transaction with the 'length' argument")
         count = 0
+        data = []
         yield self.read_data_busy.acquire()
         yield RisingEdge(self.clock)
 
@@ -487,27 +491,26 @@ class AXI4StreamSlave(BusDriver):
                 #cocotb.log.info("Valid Not Detected")
                 yield RisingEdge(self.clock)
 
-            #cocotb.log.info("Found valid!")
-            yield RisingEdge(self.clock)
-            self.bus.TREADY <=  1
-
-
-        self.bus.TREADY <= 1
+        #cocotb.log.info("Found valid!")
+        yield RisingEdge(self.clock)
+        self.bus.TREADY <=  1
 
         #If we are using TLAST we can wait for that
-        while self.bus.TVALID.value:
+        while (hasattr(self.bus, "TLAST") or (count < length)):
             yield RisingEdge(self.clock)
-            self.data.extend(self.bus.TDATA.value)
-            if (hasattr(self.bus, "TLAST")):
-                if self.bus.TLAST.value:
-                    break
-            else:
-                count = count + 1
-                if (count >= length):
-                    break
+            if self.bus.TVALID.value:
+                #XXX: if we cast to 'int' then the width is limited to 32 bits
+                data.append(int(self.bus.TDATA.value))
+                if (hasattr(self.bus, "TLAST")):
+                    if self.bus.TLAST.value:
+                        break
+                else:
+                    count = count + 1
+                    if (count >= length):
+                        break
                     
 
-        raise ReturnValue(self.data)
+        raise ReturnValue(data)
 
 
 
